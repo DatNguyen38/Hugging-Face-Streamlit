@@ -12,6 +12,7 @@ import pickle
 import shap
 import networkx as nx
 import sqlite3
+import scipy.stats as stats
 
 # Import Thư viện Học máy
 from sklearn.cluster import KMeans
@@ -503,6 +504,36 @@ def view_eda_page(df, f_df):
         )
         st.plotly_chart(fig3, use_container_width=True)
 
+    st.markdown("**➤ Kiểm định Thống kê & Phân rã Phân phối**")
+    col_stat1, col_stat2 = st.columns(2)
+
+    with col_stat1:
+        # 1. Vẽ Boxplot theo Top 5 Tasks
+        top_5_tasks_box = f_df["task"].value_counts().nlargest(5).index
+        df_box_task = f_df[f_df["task"].isin(top_5_tasks_box)]
+
+        fig_box_task = px.box(
+            df_box_task,
+            x="task",
+            y="log_downloads",
+            color="task",
+            title="Độ phân tán Lượt tải theo Top 5 Tác vụ",
+            points="outliers",  # Chỉ hiện các điểm dị biệt
+        )
+        st.plotly_chart(fig_box_task, use_container_width=True)
+
+    with col_stat2:
+        # 2. Vẽ QQ-Plot cho biến log_likes bằng Matplotlib
+        st.write("**Biểu đồ QQ-Plot (Kiểm định Phân phối chuẩn)**")
+        fig_qq, ax_qq = plt.subplots(figsize=(6, 4))
+
+        # Dùng scipy.stats.probplot để tính toán QQ
+        res = stats.probplot(f_df["log_likes"].dropna(), dist="norm", plot=ax_qq)
+
+        ax_qq.set_title("QQ-Plot của biến Log Likes")
+        ax_qq.set_xlabel("Phân vị lý thuyết (Theoretical Quantiles)")
+        ax_qq.set_ylabel("Dữ liệu thực tế (Ordered Values)")
+        st.pyplot(fig_qq)
     # -------------------------------------------------------------
     # BƯỚC NÂNG CẤP 3: GIAO DIỆN PHÂN TÍCH CẢM XÚC CỘNG ĐỒNG
     # -------------------------------------------------------------
