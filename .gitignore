@@ -1,0 +1,7 @@
+# Nội dung file .gitignore
+.env
+*.db
+*.pkl
+__pycache__/
+.streamlit/secrets.toml
+.ipynb_checkpoints/
