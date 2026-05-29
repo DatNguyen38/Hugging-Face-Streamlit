@@ -43,6 +43,7 @@ def fetch_and_clean_data(limit=3000):
     conn = sqlite3.connect("huggingface_local_pipeline.db")
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
+    # 1. Thử lấy từ cache SQLite trước
     try:
         db_df = pd.read_sql_query(
             f"SELECT * FROM clean_models WHERE fetched_date = '{today_str}'", conn
@@ -54,20 +55,23 @@ def fetch_and_clean_data(limit=3000):
     except Exception:
         pass
 
+    # 2. Nếu không có cache, lấy từ API
     api = HfApi()
     try:
         models = api.list_models(limit=limit, sort="downloads")
         data = []
         for m in models:
-            c_at = getattr(m, "created_at", None)
+            model_id = getattr(m, "modelId", "Unknown")
             data.append(
                 {
-                    "modelId": getattr(m, "modelId", "Unknown"),
+                    "modelId": model_id,
+                    "author": model_id.split("/")[0] if "/" in model_id else "Official",
+                    "model_name_only": model_id.split("/")[-1],
                     "downloads": getattr(m, "downloads", 0) or 0,
                     "likes": getattr(m, "likes", 0) or 0,
                     "task": getattr(m, "pipeline_tag", "Other") or "Other",
-                    "createdAt": c_at if c_at else datetime(2024, 1, 1),
-                    "name_len": len(getattr(m, "modelId", "a/b").split("/")[-1]),
+                    "createdAt": getattr(m, "created_at", datetime(2024, 1, 1)),
+                    "name_len": len(model_id.split("/")[-1]),
                 }
             )
 
@@ -76,58 +80,45 @@ def fetch_and_clean_data(limit=3000):
             conn.close()
             return pd.DataFrame()
 
-        df["downloads"] = df["downloads"].fillna(0).astype(int)
-        df["likes"] = df["likes"].fillna(0).astype(int)
-        df["author"] = df["modelId"].apply(
-            lambda x: x.split("/")[0] if "/" in x else "Official"
-        )
-        df["model_name_only"] = df["modelId"].apply(lambda x: x.split("/")[-1])
-
+        # 3. Tính toán các đặc trưng kỹ thuật (Feature Engineering)
         df["log_downloads"] = np.log1p(df["downloads"])
         df["log_likes"] = np.log1p(df["likes"])
-
-        df["createdAt"] = pd.to_datetime(df["createdAt"], utc=True)
-        df["month_year"] = df["createdAt"].dt.to_period("M").astype(str)
-        df["year"] = df["createdAt"].dt.year
-
-        labels = ["Niche", "Emerging", "Popular", "Viral"]
-        df["scale"] = pd.qcut(
-            df["downloads"], q=4, labels=labels, duplicates="drop"
-        ).astype(str)
         df["engagement_rate"] = (df["likes"] / (df["downloads"] + 1)) * 100
 
+        # Phân khúc (Scale)
+        df["scale"] = pd.qcut(
+            df["downloads"],
+            q=4,
+            labels=["Niche", "Emerging", "Popular", "Viral"],
+            duplicates="drop",
+        ).astype(str)
+
+        # Mô phỏng Sentiment
         np.random.seed(42)
         base_sentiment = 55 + 4 * df["log_likes"] - 1.5 * df["log_downloads"]
-        noise = np.random.normal(10, 8, size=len(df))
-        df["sentiment_score"] = np.clip(base_sentiment + noise, 0, 100).round(1)
+        df["sentiment_score"] = np.clip(
+            base_sentiment + np.random.normal(10, 8, size=len(df)), 0, 100
+        ).round(1)
+        df["sentiment_class"] = pd.cut(
+            df["sentiment_score"],
+            bins=[0, 52, 72, 100],
+            labels=["Tiêu cực", "Trung lập", "Tích cực"],
+        )
 
-        def assign_sentiment_class(score):
-            if score < 52:
-                return "Tiêu cực"
-            elif score < 72:
-                return "Trung lập"
-            else:
-                return "Tích cực"
-
-        df["sentiment_class"] = df["sentiment_score"].apply(assign_sentiment_class)
         df["fetched_date"] = today_str
+        df["createdAt"] = pd.to_datetime(df["createdAt"], utc=True)
 
+        # 4. Lưu cache vào SQLite
         df_to_save = df.copy()
         df_to_save["createdAt"] = df_to_save["createdAt"].astype(str)
         df_to_save.to_sql("clean_models", conn, if_exists="replace", index=False)
         conn.close()
 
-        return (
-            df[df["downloads"] > 0]
-            .sort_values("downloads", ascending=False)
-            .reset_index(drop=True)
-        )
+        return df.sort_values("downloads", ascending=False).reset_index(drop=True)
+
     except Exception as e:
         st.error(f"Chi tiết lỗi API: {e}")
-        try:
-            conn.close()
-        except:
-            pass
+        conn.close()
         return pd.DataFrame()
 
 
@@ -1298,11 +1289,29 @@ def view_battle_and_ai_page(f_df):
         def normalize(val, col_name):
             max_v = f_df[col_name].max()
             min_v = f_df[col_name].min()
+
+            # 1. Xử lý riêng cho Engagement Rate: Dùng Logarit để khuếch đại sự khác biệt
+            if col_name == "engagement_rate":
+                # Cộng 1e-9 để tránh lỗi log(0)
+                transformed_val = np.log1p(val * 1000)
+                transformed_max = np.log1p(max_v * 1000)
+                transformed_min = np.log1p(min_v * 1000)
+                if transformed_max == transformed_min:
+                    return 50
+                return (
+                    (transformed_val - transformed_min)
+                    / (transformed_max - transformed_min)
+                ) * 100
+
+            # 2. Xử lý cho các chỉ số còn lại (Downloads, Likes...)
             if max_v == min_v:
                 return 50
             score = ((val - min_v) / (max_v - min_v)) * 100
+
+            # Độ dài tên: Càng ngắn càng tốt (điểm cao)
             if col_name == "name_len":
                 return 100 - score
+
             return score
 
         m1_scores = [normalize(m1_data[m], m) for m in metrics]
