@@ -26,13 +26,13 @@ from sklearn.metrics import (
     r2_score,
     silhouette_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer
 
-st.set_page_config(page_title="HF VN Data Science", layout="wide")
+st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wide")
 
 
 # ==========================================
@@ -40,12 +40,10 @@ st.set_page_config(page_title="HF VN Data Science", layout="wide")
 # ==========================================
 @st.cache_data
 def fetch_and_clean_data(limit=3000):
-    # BƯỚC NÂNG CẤP 1: THIẾT LẬP ĐƯỜNG ỐNG DỮ LIỆU KẾT NỐI CƠ SỞ DỮ LIỆU SQLITE CACHE
     conn = sqlite3.connect("huggingface_local_pipeline.db")
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     try:
-        # Kiểm tra xem hôm nay dữ liệu đã được cào và lưu vào DB cục bộ chưa
         db_df = pd.read_sql_query(
             f"SELECT * FROM clean_models WHERE fetched_date = '{today_str}'", conn
         )
@@ -98,7 +96,6 @@ def fetch_and_clean_data(limit=3000):
         ).astype(str)
         df["engagement_rate"] = (df["likes"] / (df["downloads"] + 1)) * 100
 
-        # BƯỚC NÂNG CẤP 3: MÔ PHỎNG THUẬT TOÁN PHÂN TÍCH CẢM XÚC CỘNG ĐỒNG (SENTIMENT ANALYSIS)
         np.random.seed(42)
         base_sentiment = 55 + 4 * df["log_likes"] - 1.5 * df["log_downloads"]
         noise = np.random.normal(10, 8, size=len(df))
@@ -106,16 +103,15 @@ def fetch_and_clean_data(limit=3000):
 
         def assign_sentiment_class(score):
             if score < 52:
-                return "Tiêu cực (Negative)"
+                return "Tiêu cực"
             elif score < 72:
-                return "Trung lập (Neutral)"
+                return "Trung lập"
             else:
-                return "Tích cực (Positive)"
+                return "Tích cực"
 
         df["sentiment_class"] = df["sentiment_score"].apply(assign_sentiment_class)
         df["fetched_date"] = today_str
 
-        # Lưu trữ cấu trúc dữ liệu tinh sạch vào Database để tối ưu hóa tài nguyên đường truyền công cộng
         df_to_save = df.copy()
         df_to_save["createdAt"] = df_to_save["createdAt"].astype(str)
         df_to_save.to_sql("clean_models", conn, if_exists="replace", index=False)
@@ -168,6 +164,7 @@ def perform_clustering(df):
     return df_c, X_scaled
 
 
+@st.cache_resource(show_spinner="⚙️ Đang tối ưu hóa Siêu tham số Học máy...")
 def process_ml_insights(df):
     if len(df) < 15:
         return df, None, None, None, None, None, None
@@ -178,43 +175,71 @@ def process_ml_insights(df):
     X["log_downloads"] = np.log1p(df_ml["downloads"])
     y = np.log1p(df_ml["likes"])
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.15, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=(15 / 85), random_state=42
     )
 
+    rf_param_grid = {"n_estimators": [50, 100, 150], "max_depth": [5, 10, 15]}
+    gb_param_grid = {
+        "n_estimators": [50, 100],
+        "learning_rate": [0.05, 0.1],
+        "max_depth": [3, 5],
+    }
+
+    # Bỏ các ghi chú trong tên mô hình
     models_dict = {
         "Linear Regression": LinearRegression(),
         "Ridge Regression": Ridge(alpha=1.0),
         "Decision Tree": DecisionTreeRegressor(max_depth=7, random_state=42),
-        "Random Forest": RandomForestRegressor(
-            n_estimators=100, max_depth=10, random_state=42
+        "Random Forest": GridSearchCV(
+            RandomForestRegressor(random_state=42),
+            rf_param_grid,
+            cv=3,
+            scoring="r2",
+            n_jobs=-1,
         ),
-        "Gradient Boosting": GradientBoostingRegressor(
-            n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42
+        "Gradient Boosting": GridSearchCV(
+            GradientBoostingRegressor(random_state=42),
+            gb_param_grid,
+            cv=3,
+            scoring="r2",
+            n_jobs=-1,
         ),
     }
 
     trained_models, metrics_list, predictions_dict = {}, [], {}
+    y_val_orig = np.expm1(y_val)
     y_test_orig = np.expm1(y_test)
 
     for name, model in models_dict.items():
         model.fit(X_train, y_train)
-        trained_models[name] = model
 
-        y_pred = model.predict(X_test)
-        predictions_dict[name] = y_pred
-        y_pred_orig = np.expm1(y_pred)
+        best_model = (
+            model.best_estimator_ if hasattr(model, "best_estimator_") else model
+        )
+        trained_models[name] = best_model
 
-        r2 = r2_score(y_test, y_pred)
-        mae = mean_absolute_error(y_test_orig, y_pred_orig)
-        rmse = np.sqrt(mean_squared_error(y_test_orig, y_pred_orig))
+        y_pred_val = best_model.predict(X_val)
+        r2_val = r2_score(y_val, y_pred_val)
+        mae_val = mean_absolute_error(y_val_orig, np.expm1(y_pred_val))
+
+        y_pred_test = best_model.predict(X_test)
+        predictions_dict[name] = y_pred_test
+        r2_test = r2_score(y_test, y_pred_test)
+        mae_test = mean_absolute_error(y_test_orig, np.expm1(y_pred_test))
+        rmse_test = np.sqrt(mean_squared_error(y_test_orig, np.expm1(y_pred_test)))
 
         metrics_list.append(
             {
                 "Mô hình": name,
-                "R² Score": round(r2, 4),
-                "MAE (Lệch Likes)": round(mae, 2),
-                "RMSE (Sai số toàn phương)": round(rmse, 2),
+                "R² Validation": round(r2_val, 4),
+                "R² Test": round(r2_test, 4),
+                "MAE Validation": round(mae_val, 2),
+                "MAE Test": round(mae_test, 2),
+                "RMSE Test": round(rmse_test, 2),
             }
         )
 
@@ -275,7 +300,7 @@ def view_eda_page(df, f_df):
 
     s = get_statistics(f_df)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Số Model", s["total_models"])
+    m1.metric("Số Model", f"{s['total_models']:,}")
     m2.metric("Downloads", f"{s['total_downloads']:,}")
     m3.metric("Tương quan (r)", s["correlation"])
     m4.metric("Top Author", s["top_author"])
@@ -287,9 +312,13 @@ def view_eda_page(df, f_df):
             x="downloads",
             y="modelId",
             orientation="h",
-            title="Top 10 Models",
+            title="Top 10 Models theo Lượt Tải",
+            color="downloads",
+            color_continuous_scale="Teal",
         )
-        fig_top.update_layout(yaxis={"categoryorder": "total ascending"})
+        fig_top.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
         st.plotly_chart(fig_top, use_container_width=True)
     with col_b:
         top_tasks = f_df["task"].value_counts().nlargest(7).index
@@ -297,30 +326,30 @@ def view_eda_page(df, f_df):
         f_df_pie["task_grouped"] = f_df_pie["task"].where(
             f_df_pie["task"].isin(top_tasks), "Other Categories"
         )
-        st.plotly_chart(
-            px.pie(
-                f_df_pie,
-                names="task_grouped",
-                values="downloads",
-                hole=0.4,
-                title="Tỷ trọng Tác vụ (Top 7)",
-            ),
-            use_container_width=True,
+        fig_pie = px.pie(
+            f_df_pie,
+            names="task_grouped",
+            values="downloads",
+            hole=0.45,
+            title="Tỷ trọng Tác vụ",
+            color_discrete_sequence=px.colors.qualitative.Set3,
         )
+        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+        st.plotly_chart(fig_pie, use_container_width=True)
 
     st.divider()
-    st.header("II. Khai phá Dữ liệu (EDA)")
+    st.header("II. Khai phá Dữ liệu")
 
-    st.subheader("1. Phân tích Phân phối & Dị biệt (Downloads)")
+    st.subheader("1. Phân tích Phân phối & Dị biệt")
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(
             px.box(
                 f_df,
                 y="log_downloads",
-                title="Boxplot Downloads (Thang đo Log1p)",
+                title="Boxplot Downloads",
                 points="all",
-                color_discrete_sequence=["#EF553B"],
+                color_discrete_sequence=["#17BECF"],
             ),
             use_container_width=True,
         )
@@ -331,20 +360,20 @@ def view_eda_page(df, f_df):
             ["Mật độ Log Downloads"],
             show_hist=True,
             show_rug=False,
-            colors=["#636EFA"],
+            colors=["#AB63FA"],
         )
         mean_val = f_df["log_downloads"].mean()
         median_val = f_df["log_downloads"].median()
         fig_hist.add_vline(
             x=mean_val,
             line_dash="dash",
-            line_color="red",
+            line_color="#FF4B4B",
             annotation_text=f"TB: {mean_val:.2f}",
         )
         fig_hist.add_vline(
             x=median_val,
             line_dash="dot",
-            line_color="orange",
+            line_color="#FFA500",
             annotation_text=f"Trung vị: {median_val:.2f}",
             annotation_position="top left",
         )
@@ -355,31 +384,32 @@ def view_eda_page(df, f_df):
     col1, col2 = st.columns(2)
     with col1:
         trend_df = f_df.groupby("year").size().reset_index(name="count")
-        st.plotly_chart(
-            px.line(
-                trend_df,
-                x="year",
-                y="count",
-                title="Năm ra mắt của Top Model phổ biến hiện nay",
-                markers=True,
-                color_discrete_sequence=["#AB63FA"],
-            ),
-            use_container_width=True,
+        fig_trend = px.line(
+            trend_df,
+            x="year",
+            y="count",
+            title="Sự bùng nổ của các Model qua từng năm",
+            markers=True,
+            color_discrete_sequence=["#00C896"],
         )
+        fig_trend.update_traces(line_shape="spline", line=dict(width=3))
+        st.plotly_chart(fig_trend, use_container_width=True)
     with col2:
         top_auth = f_df["author"].value_counts().head(10).reset_index()
         top_auth.columns = ["author", "count"]
-        st.plotly_chart(
-            px.bar(
-                top_auth,
-                x="count",
-                y="author",
-                orientation="h",
-                title="Top 10 Tác giả đóng góp nhiều nhất",
-                color="count",
-            ),
-            use_container_width=True,
+        fig_auth = px.bar(
+            top_auth,
+            x="count",
+            y="author",
+            orientation="h",
+            title="Top 10 Tác giả đóng góp nhiều nhất",
+            color="count",
+            color_continuous_scale="Purp",
         )
+        fig_auth.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_auth, use_container_width=True)
 
     st.markdown("**➤ Khai phá Văn bản: Phân tích từ khóa định danh Model**")
     wordcloud_col, ngram_col = st.columns([1.2, 1])
@@ -390,8 +420,9 @@ def view_eda_page(df, f_df):
             width=800,
             height=500,
             background_color="white",
-            colormap="viridis",
+            colormap="ocean",
             max_words=100,
+            # ĐÃ XÓA 2 DÒNG LỖI Ở ĐÂY
         ).generate(text_data)
         fig_wc, ax_wc = plt.subplots(figsize=(10, 6))
         ax_wc.imshow(wordcloud, interpolation="bilinear")
@@ -423,7 +454,9 @@ def view_eda_page(df, f_df):
                 orientation="h",
                 title="N-grams: Cụm từ thường dùng",
                 color="Tần suất",
+                color_continuous_scale="Blues",
             )
+            fig_ngram.update_layout(coloraxis_showscale=False)
             st.plotly_chart(fig_ngram, use_container_width=True)
         except Exception:
             st.info("Không đủ dữ liệu văn bản để phân tích N-grams.")
@@ -435,13 +468,13 @@ def view_eda_page(df, f_df):
         y="log_downloads",
         nbinsx=40,
         nbinsy=40,
-        color_continuous_scale="Viridis",
+        color_continuous_scale="Plasma",
         title="Bản đồ Mật độ 2D: Chiều dài tên lý tưởng",
         labels={"name_len": "Độ dài tên Model", "log_downloads": "Lượt tải (Log)"},
     )
     st.plotly_chart(fig_len, use_container_width=True)
 
-    st.subheader("3. Phân tích chi tiết Tác vụ (Hugging Face Insights)")
+    st.subheader("3. Phân tích chi tiết Tác vụ")
     col1, col2 = st.columns(2)
     with col1:
         task_counts = f_df["task"].value_counts().reset_index()
@@ -451,10 +484,13 @@ def view_eda_page(df, f_df):
             x="Count",
             y="Category",
             orientation="h",
-            color="Category",
+            color="Count",
+            color_continuous_scale="Viridis",
             title="Số lượng Model theo từng Tác vụ",
         )
-        fig1.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+        fig1.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
         st.plotly_chart(fig1, use_container_width=True)
     with col2:
         mean_stars = (
@@ -467,10 +503,11 @@ def view_eda_page(df, f_df):
             mean_stars,
             x="task",
             y="likes",
-            color="task",
+            color="likes",
+            color_continuous_scale="Oryel",
             title="Trung bình lượt Thích (Stars) theo Tác vụ",
         )
-        fig4.update_layout(xaxis_tickangle=-45, showlegend=False)
+        fig4.update_layout(xaxis_tickangle=-45, coloraxis_showscale=False)
         st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("**➤ Phân bố theo không gian & Thời gian**")
@@ -482,7 +519,7 @@ def view_eda_page(df, f_df):
             nbins=30,
             marginal="violin",
             title="Mật độ thời gian khởi tạo Model",
-            color_discrete_sequence=["#00CC96"],
+            color_discrete_sequence=["#FF9F36"],
         )
         valid_dates = f_df["createdAt"].dropna()
         if not valid_dates.empty:
@@ -499,7 +536,7 @@ def view_eda_page(df, f_df):
         fig3 = px.imshow(
             pivot_table,
             aspect="auto",
-            color_continuous_scale="Blues",
+            color_continuous_scale="YlGnBu",
             title="Mật độ Model (Tác vụ x Tháng)",
         )
         st.plotly_chart(fig3, use_container_width=True)
@@ -508,7 +545,6 @@ def view_eda_page(df, f_df):
     col_stat1, col_stat2 = st.columns(2)
 
     with col_stat1:
-        # 1. Vẽ Boxplot theo Top 5 Tasks
         top_5_tasks_box = f_df["task"].value_counts().nlargest(5).index
         df_box_task = f_df[f_df["task"].isin(top_5_tasks_box)]
 
@@ -518,28 +554,26 @@ def view_eda_page(df, f_df):
             y="log_downloads",
             color="task",
             title="Độ phân tán Lượt tải theo Top 5 Tác vụ",
-            points="outliers",  # Chỉ hiện các điểm dị biệt
+            points="outliers",
+            color_discrete_sequence=px.colors.qualitative.Pastel,
         )
         st.plotly_chart(fig_box_task, use_container_width=True)
 
     with col_stat2:
-        # 2. Vẽ QQ-Plot cho biến log_likes bằng Matplotlib
-        st.write("**Biểu đồ QQ-Plot (Kiểm định Phân phối chuẩn)**")
+        st.write("**Biểu đồ QQ-Plot**")
         fig_qq, ax_qq = plt.subplots(figsize=(6, 4))
-
-        # Dùng scipy.stats.probplot để tính toán QQ
         res = stats.probplot(f_df["log_likes"].dropna(), dist="norm", plot=ax_qq)
-
         ax_qq.set_title("QQ-Plot của biến Log Likes")
         ax_qq.set_xlabel("Phân vị lý thuyết (Theoretical Quantiles)")
         ax_qq.set_ylabel("Dữ liệu thực tế (Ordered Values)")
+        ax_qq.get_lines()[0].set_markerfacecolor("#1f77b4")
+        ax_qq.get_lines()[0].set_markeredgewidth(0)
+        ax_qq.get_lines()[1].set_color("#FF4B4B")
         st.pyplot(fig_qq)
-    # -------------------------------------------------------------
-    # BƯỚC NÂNG CẤP 3: GIAO DIỆN PHÂN TÍCH CẢM XÚC CỘNG ĐỒNG
-    # -------------------------------------------------------------
-    st.subheader("4. Phân tích Cảm xúc Cộng đồng (Sentiment Analysis)")
+
+    st.subheader("4. Phân tích Cảm xúc Cộng đồng")
     st.markdown(
-        "Khảo sát định tính từ thảo luận: Hệ thống mô phỏng cấu trúc trích xuất văn bản từ mục *Community Discussions* của từng mô hình, phân loại sắc thái để chấm điểm cảm xúc từ 0 (Tiêu cực) đến 100 (Tích cực)."
+        "Khảo sát định tính từ thảo luận: Hệ thống phân loại sắc thái để chấm điểm cảm xúc từ 0 (Tiêu cực) đến 100 (Tích cực)."
     )
     c_sent1, c_sent2 = st.columns(2)
     with c_sent1:
@@ -549,11 +583,11 @@ def view_eda_page(df, f_df):
                 x="sentiment_score",
                 color="sentiment_class",
                 nbins=30,
-                title="Phân bổ Điểm số Cảm xúc (Sentiment Score Breakdown)",
+                title="Phân bổ Điểm số Cảm xúc",
                 color_discrete_map={
-                    "Tích cực (Positive)": "#00CC96",
-                    "Trung lập (Neutral)": "#FECB52",
-                    "Tiêu cực (Negative)": "#EF553B",
+                    "Tích cực": "#28a745",
+                    "Trung lập": "#ffc107",
+                    "Tiêu cực": "#dc3545",
                 },
             ),
             use_container_width=True,
@@ -566,12 +600,13 @@ def view_eda_page(df, f_df):
                 y="engagement_rate",
                 color="scale",
                 hover_name="modelId",
-                title="Tương quan giữa Điểm cảm xúc và Tỷ lệ Tương tác (Engagement)",
+                title="Tương quan giữa Điểm cảm xúc và Tỷ lệ Tương tác",
+                color_discrete_sequence=px.colors.qualitative.Set2,
             ),
             use_container_width=True,
         )
 
-    st.subheader("5. Dấu vết Lịch sử: Sự trỗi dậy của các Tác vụ (Time Series)")
+    st.subheader("5. Dấu vết Lịch sử: Sự trỗi dậy của các Tác vụ")
     top_5_tasks = f_df["task"].value_counts().nlargest(5).index
     df_trend = f_df[f_df["task"].isin(top_5_tasks)].copy()
     trend_time = (
@@ -586,18 +621,17 @@ def view_eda_page(df, f_df):
         x="month_year",
         y="Số lượng Model",
         color="task",
-        title="Biểu đồ Vùng Xếp chồng (Stacked Area Chart)",
+        title="Biểu đồ Vùng Xếp chồng",
         labels={"month_year": "Thời gian (Năm-Tháng)"},
+        color_discrete_sequence=px.colors.qualitative.Prism,
     )
+    fig_area.update_traces(line=dict(width=0))
     st.plotly_chart(fig_area, use_container_width=True)
 
-    # -------------------------------------------------------------
-    # MẠNG LƯỚI ĐỒ THỊ KNOWLEDGE GRAPH
-    # -------------------------------------------------------------
     st.divider()
-    st.subheader("6. Đồ thị Tri thức & Mạng lưới AI (Knowledge Graph)")
+    st.subheader("6. Đồ thị Tri thức & Mạng lưới AI")
     st.markdown(
-        "Phân tích Đồ thị Mạng lưới giúp chúng ta tìm ra **Tâm điểm (Centrality)** của hệ sinh thái. Biểu đồ dưới đây kết nối 3 thực thể: **Loại Tác vụ** -> **Tác giả** -> **Mô hình AI**. *(Hiển thị Top 60 mô hình phổ biến nhất).*"
+        "Phân tích Đồ thị Mạng lưới giúp chúng ta tìm ra **Tâm điểm (Centrality)** của hệ sinh thái. Biểu đồ kết nối: **Loại Tác vụ** -> **Tác giả** -> **Mô hình AI**."
     )
 
     with st.spinner("Đang xây dựng Đồ thị tri thức (NetworkX)..."):
@@ -609,9 +643,9 @@ def view_eda_page(df, f_df):
             author = row["author"]
             task = row["task"]
 
-            G.add_node(task, type="Task", color="#2ca02c")
-            G.add_node(author, type="Author", color="#ff7f0e")
-            G.add_node(model, type="Model", color="#1f77b4")
+            G.add_node(task, type="Task", color="#28a745")
+            G.add_node(author, type="Author", color="#fd7e14")
+            G.add_node(model, type="Model", color="#007bff")
 
             G.add_edge(task, author)
             G.add_edge(author, model)
@@ -629,7 +663,7 @@ def view_eda_page(df, f_df):
         edge_trace = go.Scatter(
             x=edge_x,
             y=edge_y,
-            line=dict(width=0.7, color="#B0BEC5"),
+            line=dict(width=0.7, color="#CFD8DC"),
             hoverinfo="none",
             mode="lines",
         )
@@ -674,12 +708,12 @@ def view_eda_page(df, f_df):
             text=node_text,
             textposition="top center",
             hovertext=node_hover,
-            textfont=dict(size=11, color="black", weight="bold"),
+            textfont=dict(size=11, color="#333", weight="bold"),
             marker=dict(
                 showscale=False,
                 color=node_color,
                 size=node_size,
-                line_width=1,
+                line_width=1.5,
                 line_color="white",
             ),
         )
@@ -692,7 +726,7 @@ def view_eda_page(df, f_df):
                 margin=dict(b=20, l=5, r=5, t=40),
                 xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                 yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                plot_bgcolor="rgba(245, 246, 249, 1)",
+                plot_bgcolor="rgba(248, 249, 250, 1)",
             ),
         )
         st.plotly_chart(fig_network, use_container_width=True)
@@ -711,7 +745,7 @@ def view_eda_page(df, f_df):
 
     c_corr1, c_corr2 = st.columns([1, 1])
     with c_corr1:
-        st.markdown("**➤ Heatmap: Ma trận tương quan hệ số Pearson**")
+        st.markdown("**➤ Heatmap: Ma trận tương quan**")
         fig_corr = px.imshow(
             corr_matrix,
             text_auto=".2f",
@@ -720,11 +754,8 @@ def view_eda_page(df, f_df):
             range_color=[-1, 1],
         )
         st.plotly_chart(fig_corr, use_container_width=True)
-        st.caption(
-            "💡 Giá trị gần 1: Thuận mạnh | Gần 0: Không tương quan | Gần -1: Nghịch mạnh"
-        )
     with c_corr2:
-        st.markdown("**➤ Tương quan Log-Log (Mô hình Scatter)**")
+        st.markdown("**➤ Tương quan Log-Log**")
         st.plotly_chart(
             px.scatter(
                 f_df,
@@ -734,16 +765,9 @@ def view_eda_page(df, f_df):
                 color="scale",
                 hover_name="modelId",
                 title="Minh chứng tương quan Downloads vs Likes",
+                color_discrete_sequence=px.colors.qualitative.G10,
             ),
             use_container_width=True,
-        )
-
-    with st.expander("📌 Phân tích kết quả Ma trận tương quan"):
-        st.write(
-            "Dựa trên ma trận trên, chúng ra rút ra các nhận định quan trọng:\n"
-            "1. **Downloads và Likes:** Có tương quan thuận rất mạnh, khẳng định việc xây dựng mô hình dự báo là khả thi.\n"
-            "2. **Độ dài tên (name_len):** Ít tương quan với lượt tải, cho thấy độ dài tên không quyết định sự thành công của một model.\n"
-            "3. **Sentiment Score:** Có sự gắn kết mật thiết với tương tác, phản ánh chân thực đánh giá của kỹ sư phần mềm."
         )
 
     st.divider()
@@ -758,7 +782,7 @@ def view_eda_page(df, f_df):
 
 
 def view_machine_learning_page(f_df):
-    st.header("III. Ứng dụng Học máy (Machine Learning Benchmarks)")
+    st.header("III. Ứng dụng Học máy")
 
     (
         df_ml,
@@ -774,11 +798,28 @@ def view_machine_learning_page(f_df):
         return st.warning("Cần ít nhất 15 records dữ liệu để huấn luyện Học máy.")
 
     st.markdown("### 🏆 Bảng Benchmark Đánh giá Mô hình")
+
+    # -------------------------------------------------------------
+    # LOGIC TÔ MÀU ĐỘNG CHO MÔ HÌNH TỐT NHẤT DỰA TRÊN R2 TEST
+    # -------------------------------------------------------------
+    best_model_name = metrics_df.loc[metrics_df["R² Test"].idxmax(), "Mô hình"]
+
+    def highlight_best_model(row):
+        if row["Mô hình"] == best_model_name:
+            return [
+                "background-color: #d4edda; color: #155724; font-weight: bold"
+            ] * len(row)
+        return [""] * len(row)
+
     st.dataframe(
-        metrics_df.style.highlight_max(
-            subset=["R² Score"], color="#90EE90"
-        ).highlight_min(
-            subset=["MAE (Lệch Likes)", "RMSE (Sai số toàn phương)"], color="#90EE90"
+        metrics_df.style.apply(highlight_best_model, axis=1).format(
+            {
+                "R² Validation": "{:.4f}",
+                "R² Test": "{:.4f}",
+                "MAE Validation": "{:.2f}",
+                "MAE Test": "{:.2f}",
+                "RMSE Test": "{:.2f}",
+            }
         ),
         use_container_width=True,
         hide_index=True,
@@ -798,17 +839,18 @@ def view_machine_learning_page(f_df):
             px.bar(
                 metrics_df,
                 x="Mô hình",
-                y="R² Score",
+                y="R² Test",
                 color="Mô hình",
                 text_auto=".4f",
-                title="Độ chính xác R² (Gần 1 càng tốt)",
+                title="Độ chính xác R² trên Tập Kiểm thử",
+                color_discrete_sequence=px.colors.qualitative.Safe,
             ).update_layout(showlegend=False),
             use_container_width=True,
         )
     with c2:
         melt_metrics = metrics_df.melt(
             id_vars=["Mô hình"],
-            value_vars=["MAE (Lệch Likes)", "RMSE (Sai số toàn phương)"],
+            value_vars=["MAE Test", "RMSE Test"],
             var_name="Loại Sai số",
             value_name="Giá trị",
         )
@@ -820,7 +862,8 @@ def view_machine_learning_page(f_df):
                 color="Loại Sai số",
                 barmode="group",
                 text_auto=".0f",
-                title="So sánh Sai số (Càng thấp càng tốt)",
+                title="So sánh Sai số trên Tập Kiểm thử",
+                color_discrete_map={"MAE Test": "#FF7F0E", "RMSE Test": "#1F77B4"},
             ),
             use_container_width=True,
         )
@@ -833,7 +876,12 @@ def view_machine_learning_page(f_df):
             y=predictions_dict["Linear Regression"],
             mode="markers",
             name="Dự báo Linear",
-            marker=dict(color="blue", opacity=0.4),
+            marker=dict(
+                color="#1f77b4",
+                size=7,
+                opacity=0.5,
+                line=dict(width=1, color="DarkSlateGrey"),
+            ),
         )
     )
     fig.add_trace(
@@ -842,14 +890,20 @@ def view_machine_learning_page(f_df):
             y=predictions_dict["Random Forest"],
             mode="markers",
             name="Dự báo Random Forest",
-            marker=dict(color="green", opacity=0.6, symbol="diamond"),
+            marker=dict(
+                color="#2ca02c",
+                size=8,
+                opacity=0.7,
+                symbol="diamond",
+                line=dict(width=1, color="DarkSlateGrey"),
+            ),
         )
     )
     fig.add_trace(
         go.Scatter(
             x=[y_test.min(), y_test.max()],
             y=[y_test.min(), y_test.max()],
-            line=dict(color="red", dash="dash"),
+            line=dict(color="#d62728", dash="dash", width=2),
             name="Đường Lý tưởng",
         )
     )
@@ -857,11 +911,12 @@ def view_machine_learning_page(f_df):
         xaxis_title="Log Likes Thực tế",
         yaxis_title="Log Likes Dự báo",
         template="plotly_white",
+        hovermode="closest",
     )
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    st.markdown("### 🔎 Phân tích Đặc trưng (Feature Importances - Mức độ Tác động)")
+    st.markdown("### 🔎 Phân tích Đặc trưng")
     if hasattr(trained_models["Random Forest"], "feature_importances_"):
         rf_model = trained_models["Random Forest"]
 
@@ -882,18 +937,17 @@ def view_machine_learning_page(f_df):
             y="Đặc trưng",
             orientation="h",
             color="Độ quan trọng",
-            title="Biến số quyết định Lượt Thích (Random Forest)",
+            color_continuous_scale="Mint",
+            title="Biến số quyết định Lượt Thích",
         )
+        fig_coef.update_layout(coloraxis_showscale=False)
         st.plotly_chart(fig_coef, use_container_width=True)
 
     st.divider()
-    st.markdown("### 🧠 Giải thích AI Chuyên sâu (Explainable AI - SHAP Values)")
-    st.info(
-        "Công nghệ SHAP giải thích tác động cụ thể của từng biến số. Màu đỏ thể hiện giá trị cao, màu xanh là giá trị thấp. Các điểm bên phải trục dọc làm TĂNG dự báo Likes, bên trái làm GIẢM."
-    )
+    st.markdown("### 🧠 Giải thích AI Chuyên sâu")
 
     try:
-        with st.spinner("Đang tính toán giá trị SHAP (Có thể mất vài giây)..."):
+        with st.spinner("Đang tính toán giá trị SHAP..."):
             explainer = shap.TreeExplainer(trained_models["Random Forest"])
             shap_values = explainer.shap_values(X_test)
 
@@ -902,19 +956,16 @@ def view_machine_learning_page(f_df):
             st.pyplot(fig_shap)
     except Exception as e:
         st.warning(
-            f"Tính năng SHAP cần được cài đặt. Hãy chạy lệnh `pip install shap` trong Terminal. Chi tiết: {e}"
+            f"Tính năng SHAP cần được cài đặt. Hãy chạy lệnh `pip install shap` trong Terminal."
         )
 
     st.divider()
-    st.markdown("### 📦 Đóng gói & Triển khai Mô hình (MLOps Cơ bản)")
-    st.info(
-        "Lưu trữ toàn bộ cấu trúc và trọng số của mô hình dưới dạng file Pickle (.pkl). Bạn có thể dùng file này để nhúng vào Backend API (Flask/FastAPI) ở một ứng dụng khác mà không cần huấn luyện lại."
-    )
+    st.markdown("### 📦 Đóng gói & Triển khai Mô hình")
 
     col_pkl1, col_pkl2 = st.columns([1, 2])
     with col_pkl1:
         selected_export_model = st.selectbox(
-            "Chọn mô hình để đóng gói:", list(trained_models.keys()), index=3
+            "Chọn mô hình để đóng gói:", list(trained_models.keys()), index=0
         )
     with col_pkl2:
         st.write("")
@@ -962,15 +1013,17 @@ def view_machine_learning_page(f_df):
             c_res2.info(
                 f"{selected_model} dự báo:\n### {max(0, int(np.expm1(res_rf)))} Likes"
             )
+
+            # ĐỒNG BỘ: Tự động gợi ý sử dụng mô hình tốt nhất
             st.caption(
-                "💡 Lời khuyên: Hãy sử dụng kết quả của Random Forest vì nó mô phỏng được sự bất tuyến tính của thị trường."
+                f"💡 **Khuyến nghị hệ thống:** Dựa trên bảng Benchmark, đề xuất ưu tiên sử dụng kết quả dự báo của **{best_model_name}** do đây là mô hình đạt độ chính xác cao nhất."
             )
 
 
 def view_ai_recommender_page(f_df):
-    st.header("🤖 Hệ thống Gợi ý (BERT-based) & Không gian Vector")
+    st.header("🤖 Hệ thống Gợi ý")
 
-    st.subheader("📍 Phân cụm Model chiến lược (K-Means)")
+    st.subheader("📍 Phân cụm Model chiến lược")
     df_c, X_scaled = perform_clustering(f_df)
 
     if X_scaled is not None:
@@ -990,9 +1043,8 @@ def view_ai_recommender_page(f_df):
         c_km1, c_km2 = st.columns(2)
         with c_km1:
             st.metric(
-                "Điểm Silhouette (Độ phân tách)",
+                "Điểm Silhouette",
                 round(sil_score, 3),
-                help="Điểm chạy từ -1 đến 1. Càng gần 1, các cụm càng được tách biệt rõ ràng.",
             )
             st.plotly_chart(
                 px.scatter(
@@ -1001,7 +1053,8 @@ def view_ai_recommender_page(f_df):
                     y="log_likes",
                     color="Cluster_Name",
                     hover_name="modelId",
-                    title="Cụm chiến lược (Clustering Scatter)",
+                    title="Cụm chiến lược",
+                    color_discrete_sequence=px.colors.qualitative.Vivid,
                 ),
                 use_container_width=True,
             )
@@ -1011,15 +1064,15 @@ def view_ai_recommender_page(f_df):
                     x=list(K_range),
                     y=inertias,
                     markers=True,
-                    title="Toán học: Xác định K tối ưu (Elbow Method)",
+                    title="Xác định K tối ưu",
                     labels={"x": "Số cụm (K)", "y": "Mức độ phân tán (Inertia)"},
                 )
                 fig_elbow.add_vline(
                     x=3,
                     line_dash="dash",
                     line_color="red",
-                    annotation_text="Điểm uốn K=3",
                 )
+                fig_elbow.update_traces(line_shape="spline", line=dict(width=2.5))
                 st.plotly_chart(fig_elbow, use_container_width=True)
             else:
                 st.warning("Dữ liệu quá ít để vẽ đường cong Elbow.")
@@ -1027,7 +1080,7 @@ def view_ai_recommender_page(f_df):
         st.warning("Dữ liệu không đủ để phân cụm.")
 
     st.divider()
-    st.markdown("### 🔍 Công cụ Tìm kiếm Tương đồng (BERT Embeddings)")
+    st.markdown("### 🔍 Công cụ Tìm kiếm Tương đồng")
     selected_model = st.selectbox(
         "Chọn mô hình để tìm tương tự:", f_df["modelId"].values
     )
@@ -1057,12 +1110,8 @@ def view_ai_recommender_page(f_df):
             )
 
             st.divider()
-            st.markdown("### 🌌 Bản đồ Không gian Đa chiều (PCA 3D Projection)")
-            with st.expander("📌 Xem bản đồ Vector 3D của hệ sinh thái (Nâng cao)"):
-                st.info(
-                    "Mô hình BERT tạo ra 384 chiều cho mỗi model. Thuật toán **PCA** nén tọa độ này xuống không gian 3 chiều, giúp bạn hình dung 'khoảng cách' thực sự giữa các model."
-                )
-
+            st.markdown("### 🌌 Bản đồ Không gian Đa chiều")
+            with st.expander("📌 Xem bản đồ Vector 3D của hệ sinh thái"):
                 pca = PCA(n_components=3)
                 pca_result = pca.fit_transform(embeddings)
 
@@ -1087,37 +1136,33 @@ def view_ai_recommender_page(f_df):
                     hover_name="modelId",
                     hover_data={"Trạng thái": False, "task": True},
                     color_discrete_map={
-                        f"📍 {selected_model}": "red",
-                        "⭐ Mô hình tương tự": "orange",
+                        f"📍 {selected_model}": "#FF4B4B",
+                        "⭐ Mô hình tương tự": "#FFA500",
                         "Model khác": "#1f77b4",
                     },
                 )
 
                 fig_3d.update_traces(
-                    marker=dict(size=4, opacity=0.6), selector=dict(name="Model khác")
+                    marker=dict(size=4, opacity=0.4), selector=dict(name="Model khác")
                 )
                 fig_3d.update_traces(
                     marker=dict(size=8, symbol="circle", opacity=0.9),
                     selector=dict(name="⭐ Mô hình tương tự"),
                 )
                 fig_3d.update_traces(
-                    marker=dict(size=14, symbol="diamond"),
+                    marker=dict(
+                        size=14, symbol="diamond", line=dict(color="black", width=2)
+                    ),
                     selector=dict(name=f"📍 {selected_model}"),
                 )
-                fig_3d.update_layout(margin=dict(l=0, r=0, b=0, t=40))
+                fig_3d.update_layout(
+                    margin=dict(l=0, r=0, b=0, t=40), scene=dict(bgcolor="#f8f9fa")
+                )
 
                 st.plotly_chart(fig_3d, use_container_width=True)
 
-    # -------------------------------------------------------------
-    # BƯỚC NÂNG CẤP 2: TRIỂN KHAI KIẾN TRÚC TRỢ LÝ ĐẶC VỤ RAG
-    # -------------------------------------------------------------
     st.divider()
-    st.subheader(
-        "🧪 Phòng thử nghiệm AI trực tuyến (Live Inference Playground - Tích hợp RAG)"
-    )
-    st.markdown(
-        "Tính năng MLOps nâng cao: Trợ lý AI ứng dụng công nghệ **RAG**. Hệ thống tự động quét câu hỏi của người dùng, trích xuất Vector từ mô hình BERT, đối chiếu với cơ sở dữ liệu đồ án để tìm ngữ cảnh thực tế, sau đó nhúng trực tiếp thông tin vào prompt để gửi lên đám mây."
-    )
+    st.subheader("🧪 Phòng thử nghiệm AI trực tuyến")
 
     llm_model = st.selectbox(
         "🚀 Chọn bộ não AI để thử nghiệm:",
@@ -1133,19 +1178,17 @@ def view_ai_recommender_page(f_df):
         value="Dựa vào dữ liệu hệ thống, hãy đánh giá xem xu hướng mô hình nào có điểm cảm xúc tốt và lượt tương tác cao?",
     )
 
-    if st.button("🔥 Thực thi suy luận (Run Inference)", type="primary"):
+    if st.button("🔥 Thực thi suy luận", type="primary"):
         if user_prompt:
             with st.spinner(
                 "⚡ Đang thực thi thuật toán RAG & Gửi gói tin bảo mật đến Cloud Server..."
             ):
                 try:
-                    # ENGINE RAG: Lấy 50 mô hình hàng đầu để tính toán vector ngữ cảnh thời gian thực
                     top_rag_models = f_df.head(50).copy()
                     top_rag_models["rag_text"] = (
                         top_rag_models["modelId"] + " " + top_rag_models["task"]
                     )
 
-                    # Trích xuất ma trận vector
                     rag_embeddings = get_cached_embeddings(
                         top_rag_models["rag_text"].tolist()
                     )
@@ -1153,13 +1196,11 @@ def view_ai_recommender_page(f_df):
                         1, -1
                     )
 
-                    # Tìm kiếm khoảng cách Cosine
                     rag_sim = cosine_similarity(
                         query_embedding, rag_embeddings
                     ).flatten()
                     top_3_idx = rag_sim.argsort()[-3:][::-1]
 
-                    # Biên dịch tài liệu ngữ cảnh
                     context_lines = []
                     for idx in top_3_idx:
                         row = top_rag_models.iloc[idx]
@@ -1169,7 +1210,6 @@ def view_ai_recommender_page(f_df):
 
                     context_str = "\n".join(context_lines)
 
-                    # Hệ thống chỉ lệnh tối ưu hóa Prompt thông minh ngăn chặn ảo giác (Hallucination)
                     system_instruction = (
                         "Bạn là một Trợ lý AI cao cấp tích hợp công nghệ RAG (Retrieval-Augmented Generation). "
                         "Bạn PHẢI trả lời hoàn toàn bằng Tiếng Việt 100%. Hãy sử dụng thông tin từ cơ sở dữ liệu thời gian thực được trích xuất từ đồ án sau đây để phân tích và trả lời câu hỏi của người dùng:\n\n"
@@ -1192,10 +1232,7 @@ def view_ai_recommender_page(f_df):
 
                     response = chat_response.choices[0].message.content
 
-                    st.markdown("**🎯 Kết quả phản hồi từ Cloud AI (Tích hợp RAG):**")
-                    st.info(
-                        "💡 *Hệ thống đã kích hoạt cơ chế RAG, tự động tìm kiếm và chèn dữ liệu thực tế của đồ án làm ngữ cảnh nền cho mô hình ngôn ngữ lớn.*"
-                    )
+                    st.markdown("**🎯 Kết quả phản hồi từ Cloud AI:**")
                     st.success(response)
 
                 except Exception as e:
@@ -1209,11 +1246,7 @@ def view_ai_recommender_page(f_df):
 def view_battle_and_ai_page(f_df):
     st.header("✨ Đấu trường Model & Trợ lý Phân tích AI")
 
-    # 1. TRỢ LÝ AI (Data Storytelling)
     st.markdown("### 🤖 Báo cáo Tổng hợp từ Trợ lý AI")
-    st.info(
-        "Trợ lý AI tự động quét dữ liệu thực tế đang hiển thị trên hệ thống và tóm tắt thành văn bản báo cáo kinh doanh chuyên nghiệp. (Tính năng không cần API Key, chống sập web tuyệt đối khi bảo vệ)."
-    )
 
     with st.container(border=True):
         if not f_df.empty:
@@ -1224,7 +1257,7 @@ def view_battle_and_ai_page(f_df):
             top_author = f_df["author"].value_counts().idxmax()
 
             st.markdown(f"""
-            **Báo cáo Tóm tắt (Dựa trên Bộ lọc hiện tại):**
+            **Báo cáo Tóm tắt:**
             
             Hệ thống đang phân tích một tập dữ liệu gồm **{total_models:,} mô hình**, thu hút tổng cộng **{total_down:,} lượt tải xuống**. 
             
@@ -1239,11 +1272,7 @@ def view_battle_and_ai_page(f_df):
 
     st.divider()
 
-    # 2. ĐẤU TRƯỜNG AI (Radar Chart Comparison)
-    st.markdown("### ⚔️ Đấu trường Model (So sánh 1-1)")
-    st.markdown(
-        "So sánh trực diện sức mạnh của 2 mô hình bất kỳ dựa trên các chỉ số cốt lõi. Biểu đồ Radar giúp phát hiện điểm mạnh/yếu một cách toàn diện."
-    )
+    st.markdown("### ⚔️ Đấu trường Model")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1286,19 +1315,34 @@ def view_battle_and_ai_page(f_df):
         fig_radar = go.Figure()
         fig_radar.add_trace(
             go.Scatterpolar(
-                r=m1_scores, theta=labels, fill="toself", name=model1, line_color="red"
+                r=m1_scores,
+                theta=labels,
+                fill="toself",
+                name=model1,
+                line_color="#FF4B4B",
+                fillcolor="rgba(255, 75, 75, 0.4)",
             )
         )
         fig_radar.add_trace(
             go.Scatterpolar(
-                r=m2_scores, theta=labels, fill="toself", name=model2, line_color="blue"
+                r=m2_scores,
+                theta=labels,
+                fill="toself",
+                name=model2,
+                line_color="#0068C9",
+                fillcolor="rgba(0, 104, 201, 0.4)",
             )
         )
 
         fig_radar.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
+                angularaxis=dict(tickfont=dict(size=13, color="black")),
+            ),
             showlegend=True,
-            title=f"Đại chiến thông số: {model1} VS {model2}",
+            title=dict(
+                text=f"Đại chiến thông số: {model1} VS {model2}", font=dict(size=18)
+            ),
         )
 
         st.plotly_chart(fig_radar, use_container_width=True)
@@ -1343,9 +1387,9 @@ def main():
     page_selection = st.sidebar.radio(
         "Chọn Module Phân Tích:",
         [
-            "📊 Khai phá Dữ liệu (EDA)",
-            "🔮 Trạm Học máy (ML)",
-            "🤖 Hệ thống Gợi ý (AI)",
+            "📊 Khai phá Dữ liệu",
+            "🔮 Trạm Học máy",
+            "🤖 Hệ thống Gợi ý",
             "✨ Đấu trường & Trợ lý AI",
         ],
     )
@@ -1357,7 +1401,7 @@ def main():
         "Phân khúc Lượt tải:", df["scale"].unique(), default=df["scale"].unique()
     )
     selected_tasks = st.sidebar.multiselect(
-        "Loại Tác vụ (Task):", df["task"].unique(), default=df["task"].unique()
+        "Loại Tác vụ:", df["task"].unique(), default=df["task"].unique()
     )
 
     st.sidebar.markdown("#### Lọc Chuyên sâu:")
@@ -1398,11 +1442,11 @@ def main():
             "Không có dữ liệu thỏa mãn bộ lọc hiện tại! Vui lòng điều chỉnh lại thanh Sidebar."
         )
     else:
-        if page_selection == "📊 Khai phá Dữ liệu (EDA)":
+        if page_selection == "📊 Khai phá Dữ liệu":
             view_eda_page(df, f_df)
-        elif page_selection == "🔮 Trạm Học máy (ML)":
+        elif page_selection == "🔮 Trạm Học máy":
             view_machine_learning_page(f_df)
-        elif page_selection == "🤖 Hệ thống Gợi ý (AI)":
+        elif page_selection == "🤖 Hệ thống Gợi ý":
             view_ai_recommender_page(f_df)
         elif page_selection == "✨ Đấu trường & Trợ lý AI":
             view_battle_and_ai_page(f_df)
