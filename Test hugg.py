@@ -37,7 +37,7 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 # ------------1. DATA ENGINE----------------
 # ==========================================
 @st.cache_data
-def fetch_and_clean_data(limit=3000):
+def fetch_and_clean_data(limit=3001):
     # Sử dụng API trực tiếp & Cache RAM, KHÔNG dùng SQLite để tránh sập Cloud
     api = HfApi()
     try:
