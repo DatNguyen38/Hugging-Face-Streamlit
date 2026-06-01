@@ -145,7 +145,7 @@ def load_data_final_v1(limit=3000):
         # 4. Lưu cache vào SQLite
         df_to_save = df.copy()
         df_to_save["createdAt"] = df_to_save["createdAt"].astype(str)
-        df_to_save.to_sql("clean_models", conn, if_exists="replace", index=False)
+        # df_to_save.to_sql("clean_models", conn, if_exists="replace", index=False)
         conn.close()
 
         return df.sort_values("downloads", ascending=False).reset_index(drop=True)
