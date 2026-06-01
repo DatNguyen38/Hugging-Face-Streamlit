@@ -9,7 +9,6 @@ from wordcloud import WordCloud
 from huggingface_hub import HfApi, InferenceClient
 from datetime import datetime, timezone
 import pickle
-import shap
 import networkx as nx
 import scipy.stats as stats
 
@@ -37,8 +36,10 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 # ------------1. DATA ENGINE----------------
 # ==========================================
 @st.cache_data
-def fetch_and_clean_data(limit=3001):
-    # Sử dụng API trực tiếp & Cache RAM, KHÔNG dùng SQLite để tránh sập Cloud
+def fetch_and_clean_data(
+    limit=1000,
+):  # Giảm limit xuống 1000 để an toàn cho 1GB RAM Cloud
+    # Đã loại bỏ SQLite để tránh lỗi "Read-only file system" và "Connection reset"
     api = HfApi()
     try:
         models = api.list_models(limit=limit, sort="downloads")
@@ -140,7 +141,7 @@ def perform_clustering(df):
     return df_c, X_scaled
 
 
-@st.cache_resource(show_spinner="⚙️ Đang huấn luyện Mô hình Học máy (Tốc độ cao)...")
+@st.cache_resource(show_spinner="⚙️ Đang huấn luyện Hệ thống Học máy...")
 def process_ml_insights(df):
     if len(df) < 15:
         return df, None, None, None, None, None, None
@@ -158,16 +159,16 @@ def process_ml_insights(df):
         X_temp, y_temp, test_size=(15 / 85), random_state=42
     )
 
-    # ĐÃ GỠ BỎ GridSearchCV ĐỂ CỨU RAM CLOUD. SỬ DỤNG THAM SỐ TỐI ƯU SẴN.
+    # Đã gỡ bỏ GridSearchCV gây tràn RAM, sử dụng tham số tối ưu sẵn để chạy siêu tốc.
     models_dict = {
         "Linear Regression": LinearRegression(),
         "Ridge Regression": Ridge(alpha=1.0),
         "Decision Tree": DecisionTreeRegressor(max_depth=7, random_state=42),
         "Random Forest": RandomForestRegressor(
-            n_estimators=100, max_depth=10, random_state=42, n_jobs=-1
+            n_estimators=100, max_depth=10, random_state=42
         ),
         "Gradient Boosting": GradientBoostingRegressor(
-            n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42
+            n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42
         ),
     }
 
@@ -178,7 +179,7 @@ def process_ml_insights(df):
     for name, model in models_dict.items():
         model.fit(X_train, y_train)
 
-        best_model = model  # Vì không còn GridSearchCV nên mô hình chính là best_model
+        best_model = model
         trained_models[name] = best_model
 
         y_pred_val = best_model.predict(X_val)
@@ -215,7 +216,7 @@ def process_ml_insights(df):
 
 @st.cache_resource
 def load_bert_model():
-    # Lazy Loading để tránh sập RAM khi khởi động
+    # Lazy Loading: Giấu thư viện vào đây để Cloud không sập lúc mới mở web
     from sentence_transformers import SentenceTransformer
 
     return SentenceTransformer("all-MiniLM-L6-v2")
@@ -592,7 +593,7 @@ def view_eda_page(df, f_df):
     st.divider()
     st.subheader("6. Đồ thị Tri thức & Mạng lưới AI")
     st.markdown(
-        "Phân tích Đồ thị Mạng lưới giúp chúng ta tìm ra **Tâm điểm (Centrality)** của hệ sinh thái. Biểu đồ kết nối: **Loại Tác vụ** -> **Tác giả** -> **Mô hình AI**."
+        "Phân tích Đồ thị Mạng lưới giúp chúng ta tìm ra **Tâm điểm (Centrality)** của hệ sinh thái."
     )
 
     with st.spinner("Đang xây dựng Đồ thị tri thức (NetworkX)..."):
@@ -613,8 +614,7 @@ def view_eda_page(df, f_df):
 
         pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
 
-        edge_x = []
-        edge_y = []
+        edge_x, edge_y = [], []
         for edge in G.edges():
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
@@ -629,12 +629,14 @@ def view_eda_page(df, f_df):
             mode="lines",
         )
 
-        node_x = []
-        node_y = []
-        node_text = []
-        node_hover = []
-        node_color = []
-        node_size = []
+        node_x, node_y, node_text, node_hover, node_color, node_size = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
 
         for node in G.nodes():
             x, y = pos[node]
@@ -643,12 +645,7 @@ def view_eda_page(df, f_df):
             node_type = G.nodes[node]["type"]
 
             node_hover.append(f"Loại: {node_type}<br>Tên: {node}")
-
-            if node_type in ["Task", "Author"]:
-                node_text.append(str(node))
-            else:
-                node_text.append("")
-
+            node_text.append(str(node) if node_type in ["Task", "Author"] else "")
             node_color.append(G.nodes[node]["color"])
 
             degree = G.degree(node)
@@ -658,7 +655,6 @@ def view_eda_page(df, f_df):
                 calc_size = 20 + (degree * 1.5)
             else:
                 calc_size = 12
-
             node_size.append(calc_size)
 
         node_trace = go.Scatter(
@@ -759,7 +755,6 @@ def view_machine_learning_page(f_df):
         return st.warning("Cần ít nhất 15 records dữ liệu để huấn luyện Học máy.")
 
     st.markdown("### 🏆 Bảng Benchmark Đánh giá Mô hình")
-
     best_model_name = metrics_df.loc[metrics_df["R² Test"].idxmax(), "Mô hình"]
 
     def highlight_best_model(row):
@@ -779,13 +774,13 @@ def view_machine_learning_page(f_df):
                 "RMSE Test": "{:.2f}",
             }
         ),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
     csv_metrics = metrics_df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="📥 Tải Kết quả Đánh giá Benchmark (CSV)",
+        label="📥 Tải Kết quả Benchmark (CSV)",
         data=csv_metrics,
         file_name="model_benchmark_results.csv",
         mime="text/csv",
@@ -869,7 +864,6 @@ def view_machine_learning_page(f_df):
         xaxis_title="Log Likes Thực tế",
         yaxis_title="Log Likes Dự báo",
         template="plotly_white",
-        hovermode="closest",
     )
     st.plotly_chart(fig, width="stretch")
 
@@ -877,17 +871,19 @@ def view_machine_learning_page(f_df):
     st.markdown("### 🔎 Phân tích Đặc trưng")
     if hasattr(trained_models["Random Forest"], "feature_importances_"):
         rf_model = trained_models["Random Forest"]
-
-        df_coef = pd.DataFrame(
-            {
-                "Đặc trưng": [
-                    f.replace("t_", "Task: ") if f.startswith("t_") else f
-                    for f in feature_names
-                ],
-                "Độ quan trọng": rf_model.feature_importances_,
-            }
+        df_coef = (
+            pd.DataFrame(
+                {
+                    "Đặc trưng": [
+                        f.replace("t_", "Task: ") if f.startswith("t_") else f
+                        for f in feature_names
+                    ],
+                    "Độ quan trọng": rf_model.feature_importances_,
+                }
+            )
+            .sort_values("Độ quan trọng", ascending=False)
+            .head(10)
         )
-        df_coef = df_coef.sort_values("Độ quan trọng", ascending=False).head(10)
 
         fig_coef = px.bar(
             df_coef,
@@ -903,9 +899,10 @@ def view_machine_learning_page(f_df):
 
     st.divider()
     st.markdown("### 🧠 Giải thích AI Chuyên sâu")
-
     try:
         with st.spinner("Đang tính toán giá trị SHAP..."):
+            import shap
+
             explainer = shap.TreeExplainer(trained_models["Random Forest"])
             shap_values = explainer.shap_values(X_test)
 
@@ -914,12 +911,11 @@ def view_machine_learning_page(f_df):
             st.pyplot(fig_shap)
     except Exception as e:
         st.warning(
-            f"Tính năng SHAP đang xử lý (Hoặc cần nâng cấp cấu hình Cloud để hiển thị)."
+            "Đang tải dữ liệu SHAP nâng cao, có thể bỏ qua nếu Cloud bị giới hạn tài nguyên."
         )
 
     st.divider()
     st.markdown("### 📦 Đóng gói & Triển khai Mô hình")
-
     col_pkl1, col_pkl2 = st.columns([1, 2])
     with col_pkl1:
         selected_export_model = st.selectbox(
@@ -930,31 +926,25 @@ def view_machine_learning_page(f_df):
         st.write("")
         model_bytes = pickle.dumps(trained_models[selected_export_model])
         st.download_button(
-            label=f"📥 Tải Mô hình {selected_export_model} nguyên khối (.pkl)",
+            label=f"📥 Tải Mô hình {selected_export_model} (.pkl)",
             data=model_bytes,
             file_name=f"{selected_export_model.replace(' ', '_').lower()}_model.pkl",
             mime="application/octet-stream",
-            type="primary",
         )
 
     st.divider()
     st.markdown("**➤ Công cụ Dự báo Tương tác**")
-
     col_input, col_pred = st.columns([1, 2])
     with col_input:
         target_dl = st.number_input(
-            "Nhập Downloads mục tiêu để dự báo lượt Like:",
-            value=1000,
-            key="val_predict",
+            "Nhập Downloads mục tiêu để dự báo lượt Like:", value=1000
         )
         selected_model = st.selectbox(
-            "Chọn mô hình nâng cao để so sánh với Linear:",
+            "Chọn mô hình nâng cao so sánh với Linear:",
             list(trained_models.keys()),
             index=3,
         )
-        btn_predict = st.button(
-            "Chạy Dự Báo", type="primary", use_container_width=True
-        )  # Ngoại lệ cho button
+        btn_predict = st.button("Chạy Dự Báo", type="primary", use_container_width=True)
 
     with col_pred:
         if btn_predict:
@@ -973,9 +963,8 @@ def view_machine_learning_page(f_df):
             c_res2.info(
                 f"{selected_model} dự báo:\n### {max(0, int(np.expm1(res_rf)))} Likes"
             )
-
             st.caption(
-                f"💡 **Khuyến nghị hệ thống:** Dựa trên bảng Benchmark, đề xuất ưu tiên sử dụng kết quả dự báo của **{best_model_name}** do đây là mô hình đạt độ chính xác cao nhất."
+                f"💡 **Khuyến nghị:** Ưu tiên dùng kết quả của **{best_model_name}** vì đạt R² cao nhất."
             )
 
 
@@ -995,16 +984,12 @@ def view_ai_recommender_page(f_df):
         max_k = min(8, len(f_df))
         K_range = range(2, max_k) if max_k > 3 else range(2, 3)
         for k in K_range:
-            km = KMeans(n_clusters=k, random_state=42, n_init=10)
-            km.fit(X_scaled)
+            km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X_scaled)
             inertias.append(km.inertia_)
 
         c_km1, c_km2 = st.columns(2)
         with c_km1:
-            st.metric(
-                "Điểm Silhouette",
-                round(sil_score, 3),
-            )
+            st.metric("Điểm Silhouette", round(sil_score, 3))
             st.plotly_chart(
                 px.scatter(
                     df_c,
@@ -1026,15 +1011,9 @@ def view_ai_recommender_page(f_df):
                     title="Xác định K tối ưu",
                     labels={"x": "Số cụm (K)", "y": "Mức độ phân tán (Inertia)"},
                 )
-                fig_elbow.add_vline(
-                    x=3,
-                    line_dash="dash",
-                    line_color="red",
-                )
+                fig_elbow.add_vline(x=3, line_dash="dash", line_color="red")
                 fig_elbow.update_traces(line_shape="spline", line=dict(width=2.5))
                 st.plotly_chart(fig_elbow, width="stretch")
-            else:
-                st.warning("Dữ liệu quá ít để vẽ đường cong Elbow.")
     else:
         st.warning("Dữ liệu không đủ để phân cụm.")
 
@@ -1045,7 +1024,7 @@ def view_ai_recommender_page(f_df):
     )
 
     if selected_model:
-        with st.spinner("Đang khởi tạo thuật toán NLP Cosine & PCA 3D..."):
+        with st.spinner("Đang tính toán ma trận Vector Cosine & PCA 3D..."):
             recs, embeddings, target_idx = get_bert_recommendations(
                 f_df, selected_model
             )
@@ -1062,9 +1041,9 @@ def view_ai_recommender_page(f_df):
 
             csv_recs = recs.to_csv(index=False).encode("utf-8")
             st.download_button(
-                label="📥 Tải Danh sách AI Gợi ý (CSV)",
+                label="📥 Tải Danh sách Gợi ý (CSV)",
                 data=csv_recs,
-                file_name=f"ai_recommendations_for_{selected_model.replace('/', '_')}.csv",
+                file_name=f"recommendations_{selected_model.replace('/', '_')}.csv",
                 mime="text/csv",
             )
 
@@ -1075,15 +1054,15 @@ def view_ai_recommender_page(f_df):
                 pca_result = pca.fit_transform(embeddings)
 
                 df_pca = f_df.copy()
-                df_pca["PCA1"] = pca_result[:, 0]
-                df_pca["PCA2"] = pca_result[:, 1]
-                df_pca["PCA3"] = pca_result[:, 2]
-
-                df_pca["Trạng thái"] = "Model khác"
-                similar_model_ids = recs["modelId"].tolist()
-                df_pca.loc[df_pca["modelId"].isin(similar_model_ids), "Trạng thái"] = (
-                    "⭐ Mô hình tương tự"
+                df_pca["PCA1"], df_pca["PCA2"], df_pca["PCA3"] = (
+                    pca_result[:, 0],
+                    pca_result[:, 1],
+                    pca_result[:, 2],
                 )
+                df_pca["Trạng thái"] = "Model khác"
+                df_pca.loc[
+                    df_pca["modelId"].isin(recs["modelId"].tolist()), "Trạng thái"
+                ] = "⭐ Mô hình tương tự"
                 df_pca.loc[target_idx, "Trạng thái"] = f"📍 {selected_model}"
 
                 fig_3d = px.scatter_3d(
@@ -1100,7 +1079,6 @@ def view_ai_recommender_page(f_df):
                         "Model khác": "#1f77b4",
                     },
                 )
-
                 fig_3d.update_traces(
                     marker=dict(size=4, opacity=0.4), selector=dict(name="Model khác")
                 )
@@ -1117,15 +1095,95 @@ def view_ai_recommender_page(f_df):
                 fig_3d.update_layout(
                     margin=dict(l=0, r=0, b=0, t=40), scene=dict(bgcolor="#f8f9fa")
                 )
-
                 st.plotly_chart(fig_3d, width="stretch")
+
+    st.divider()
+    st.subheader("🧪 Phòng thử nghiệm AI trực tuyến")
+
+    llm_model = st.selectbox(
+        "🚀 Chọn bộ não AI để thử nghiệm:",
+        [
+            "Qwen/Qwen2.5-7B-Instruct",
+            "HuggingFaceH4/zephyr-7b-beta",
+            "google/gemma-2-9b-it",
+        ],
+    )
+
+    user_prompt = st.text_area(
+        "✍️ Nhập câu hỏi yêu cầu AI xử lý:",
+        value="Dựa vào dữ liệu hệ thống, hãy đánh giá xu hướng mô hình nào có điểm cảm xúc tốt?",
+    )
+
+    if st.button("🔥 Thực thi suy luận", type="primary"):
+        if user_prompt:
+            # SỬA LỖI SECRETS: Kiểm tra an toàn trước khi gọi API
+            hf_token = st.secrets.get("hf_token", None)
+
+            if not hf_token:
+                st.error(
+                    "Lỗi: Chưa cấu hình khóa bí mật `hf_token`. Vui lòng vào Streamlit Cloud > Settings > Secrets để khai báo biến `hf_token = '...'` trước khi sử dụng tính năng này."
+                )
+            else:
+                with st.spinner(
+                    "⚡ Đang thực thi thuật toán RAG & Gửi gói tin bảo mật đến Cloud..."
+                ):
+                    try:
+                        top_rag_models = f_df.head(30).copy()
+                        top_rag_models["rag_text"] = (
+                            top_rag_models["modelId"] + " " + top_rag_models["task"]
+                        )
+                        rag_embeddings = get_cached_embeddings(
+                            top_rag_models["rag_text"].tolist()
+                        )
+                        query_embedding = get_cached_embeddings([user_prompt])[
+                            0
+                        ].reshape(1, -1)
+
+                        rag_sim = cosine_similarity(
+                            query_embedding, rag_embeddings
+                        ).flatten()
+                        top_3_idx = rag_sim.argsort()[-3:][::-1]
+
+                        context_lines = []
+                        for idx in top_3_idx:
+                            row = top_rag_models.iloc[idx]
+                            context_lines.append(
+                                f"- Mô hình '{row['modelId']}' [Tác vụ: {row['task']}] đạt {row['downloads']:,} lượt tải, {row['likes']:,} lượt thích, cảm xúc: {row['sentiment_score']}/100."
+                            )
+
+                        context_str = "\n".join(context_lines)
+                        system_instruction = (
+                            "Bạn là một Trợ lý AI cao cấp tích hợp công nghệ RAG. Bạn PHẢI trả lời bằng Tiếng Việt. "
+                            f"CƠ SỞ DỮ LIỆU NGỮ CẢNH:\n{context_str}\n\n"
+                            "Tuyệt đối không bịa đặt số liệu ngoài ngữ cảnh trên."
+                        )
+
+                        client = InferenceClient(token=hf_token)
+                        chat_response = client.chat_completion(
+                            model=llm_model,
+                            messages=[
+                                {"role": "system", "content": system_instruction},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            max_tokens=600,
+                            temperature=0.3,
+                        )
+
+                        st.markdown("**🎯 Kết quả phản hồi từ Cloud AI:**")
+                        st.success(chat_response.choices[0].message.content)
+
+                    except Exception as e:
+                        st.error(
+                            f"Lỗi kết nối API Cloud: Hệ thống công cộng đang bận hoặc token hết hạn. Chi tiết: {e}"
+                        )
+        else:
+            st.warning("Vui lòng nhập văn bản trước khi thực thi.")
 
 
 def view_battle_and_ai_page(f_df):
     st.header("✨ Đấu trường Model & Trợ lý Phân tích AI")
 
     st.markdown("### 🤖 Báo cáo Tổng hợp từ Trợ lý AI")
-
     with st.container(border=True):
         if not f_df.empty:
             total_models = len(f_df)
@@ -1136,20 +1194,14 @@ def view_battle_and_ai_page(f_df):
 
             st.markdown(f"""
             **Báo cáo Tóm tắt:**
-            
             Hệ thống đang phân tích một tập dữ liệu gồm **{total_models:,} mô hình**, thu hút tổng cộng **{total_down:,} lượt tải xuống**. 
-            
-            Phân tích cho thấy **{top_task}** hiện đang là tác vụ (Task) thống trị và nhận được sự quan tâm lớn nhất từ cộng đồng phát triển. Đặc biệt, tác giả hoặc tổ chức đóng góp năng nổ nhất trong tệp dữ liệu này là **{top_author}**. 
-            
-            Ngôi sao sáng nhất trên bảng xếp hạng không ai khác chính là mô hình **`{top_model}`**, dẫn đầu tuyệt đối về mức độ phủ sóng. Các mô hình thành công có xu hướng kết hợp tên gọi ngắn gọn, rõ ràng kèm theo các từ khóa như 'instruct', 'chat' để định vị rõ tính năng đối với người dùng.
+            Phân tích cho thấy **{top_task}** hiện đang là tác vụ (Task) thống trị. Đặc biệt, tác giả hoặc tổ chức đóng góp năng nổ nhất trong tệp dữ liệu này là **{top_author}**. 
+            Ngôi sao sáng nhất trên bảng xếp hạng không ai khác chính là mô hình **`{top_model}`**, dẫn đầu tuyệt đối về mức độ phủ sóng.
             """)
         else:
-            st.warning(
-                "Không có dữ liệu để AI tổng hợp. Vui lòng nới lỏng bộ lọc ở thanh Sidebar."
-            )
+            st.warning("Không có dữ liệu để tổng hợp.")
 
     st.divider()
-
     st.markdown("### ⚔️ Đấu trường Model")
 
     col1, col2 = st.columns(2)
@@ -1165,7 +1217,7 @@ def view_battle_and_ai_page(f_df):
         m1_data = f_df[f_df["modelId"] == model1].iloc[0]
         m2_data = f_df[f_df["modelId"] == model2].iloc[0]
 
-        metrics = ["log_downloads", "log_likes", "engagement_rate", "name_len"]
+        metrics = ["downloads", "likes", "engagement_rate", "name_len"]
         labels = [
             "Sức hút (Tải xuống)",
             "Độ uy tín (Lượt Thích)",
@@ -1173,18 +1225,16 @@ def view_battle_and_ai_page(f_df):
             "Độ dài tên (Ngắn là tốt)",
         ]
 
-        def normalize(val, col_name):
-            max_v = f_df[col_name].max()
-            min_v = f_df[col_name].min()
-            if max_v == min_v:
+        # SỬA LỖI MÓP HÌNH RADAR: Dùng Xếp hạng phần trăm (Percentile) thay cho Min-Max
+        def normalize_percentile(val, col_name):
+            valid_data = f_df[col_name].dropna()
+            if valid_data.empty or valid_data.max() == valid_data.min():
                 return 50
-            score = ((val - min_v) / (max_v - min_v)) * 100
-            if col_name == "name_len":
-                return 100 - score
-            return score
+            score = stats.percentileofscore(valid_data, val)
+            return 100 - score if col_name == "name_len" else score
 
-        m1_scores = [normalize(m1_data[m], m) for m in metrics]
-        m2_scores = [normalize(m2_data[m], m) for m in metrics]
+        m1_scores = [normalize_percentile(m1_data[m], m) for m in metrics]
+        m2_scores = [normalize_percentile(m2_data[m], m) for m in metrics]
 
         m1_scores.append(m1_scores[0])
         m2_scores.append(m2_scores[0])
@@ -1224,6 +1274,7 @@ def view_battle_and_ai_page(f_df):
         )
 
         st.plotly_chart(fig_radar, width="stretch")
+
         comp_df = pd.DataFrame(
             {
                 "Chỉ số": [
@@ -1246,7 +1297,7 @@ def view_battle_and_ai_page(f_df):
                 ],
             }
         )
-        st.dataframe(comp_df, hide_index=True, width="stretch")
+        st.dataframe(comp_df, hide_index=True, use_container_width=True)
 
 
 # ==========================================
@@ -1256,7 +1307,7 @@ def main():
     df = fetch_and_clean_data()
     if df.empty:
         return st.warning(
-            "Không có dữ liệu thỏa mãn. Vui lòng kiểm tra lại kết nối API."
+            "Không có dữ liệu thỏa mãn. Hệ thống Hugging Face có thể đang bận."
         )
 
     st.sidebar.image(
