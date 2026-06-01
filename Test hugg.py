@@ -7,11 +7,10 @@ import plotly.figure_factory as ff
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from huggingface_hub import HfApi, InferenceClient
-from datetime import datetime
+from datetime import datetime, timezone
 import pickle
 import shap
 import networkx as nx
-import sqlite3
 import scipy.stats as stats
 
 # Import Thư viện Học máy
@@ -26,10 +25,9 @@ from sklearn.metrics import (
     r2_score,
     silhouette_score,
 )
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
-from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer
 
 st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wide")
@@ -39,21 +37,8 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 # ------------1. DATA ENGINE----------------
 # ==========================================
 @st.cache_data
-def fetch_and_clean_data(limit=3000):
-    conn = sqlite3.connect("huggingface_local_pipeline.db")
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
-
-    try:
-        db_df = pd.read_sql_query(
-            f"SELECT * FROM clean_models WHERE fetched_date = '{today_str}'", conn
-        )
-        if not db_df.empty:
-            db_df["createdAt"] = pd.to_datetime(db_df["createdAt"], utc=True)
-            conn.close()
-            return db_df
-    except Exception:
-        pass
-
+def fetch_and_clean_data(limit=1000):
+    # Sử dụng API trực tiếp & Cache RAM, KHÔNG dùng SQLite để tránh sập Cloud
     api = HfApi()
     try:
         models = api.list_models(limit=limit, sort="downloads")
@@ -66,14 +51,15 @@ def fetch_and_clean_data(limit=3000):
                     "downloads": getattr(m, "downloads", 0) or 0,
                     "likes": getattr(m, "likes", 0) or 0,
                     "task": getattr(m, "pipeline_tag", "Other") or "Other",
-                    "createdAt": c_at if c_at else datetime(2024, 1, 1),
+                    "createdAt": c_at
+                    if c_at
+                    else datetime(2024, 1, 1, tzinfo=timezone.utc),
                     "name_len": len(getattr(m, "modelId", "a/b").split("/")[-1]),
                 }
             )
 
         df = pd.DataFrame(data)
         if df.empty:
-            conn.close()
             return pd.DataFrame()
 
         df["downloads"] = df["downloads"].fillna(0).astype(int)
@@ -110,12 +96,6 @@ def fetch_and_clean_data(limit=3000):
                 return "Tích cực"
 
         df["sentiment_class"] = df["sentiment_score"].apply(assign_sentiment_class)
-        df["fetched_date"] = today_str
-
-        df_to_save = df.copy()
-        df_to_save["createdAt"] = df_to_save["createdAt"].astype(str)
-        df_to_save.to_sql("clean_models", conn, if_exists="replace", index=False)
-        conn.close()
 
         return (
             df[df["downloads"] > 0]
@@ -124,10 +104,6 @@ def fetch_and_clean_data(limit=3000):
         )
     except Exception as e:
         st.error(f"Chi tiết lỗi API: {e}")
-        try:
-            conn.close()
-        except:
-            pass
         return pd.DataFrame()
 
 
@@ -164,7 +140,7 @@ def perform_clustering(df):
     return df_c, X_scaled
 
 
-@st.cache_resource(show_spinner="⚙️ Đang tối ưu hóa Siêu tham số Học máy...")
+@st.cache_resource(show_spinner="⚙️ Đang huấn luyện Mô hình Học máy (Tốc độ cao)...")
 def process_ml_insights(df):
     if len(df) < 15:
         return df, None, None, None, None, None, None
@@ -182,31 +158,16 @@ def process_ml_insights(df):
         X_temp, y_temp, test_size=(15 / 85), random_state=42
     )
 
-    rf_param_grid = {"n_estimators": [50, 100, 150], "max_depth": [5, 10, 15]}
-    gb_param_grid = {
-        "n_estimators": [50, 100],
-        "learning_rate": [0.05, 0.1],
-        "max_depth": [3, 5],
-    }
-
-    # Bỏ các ghi chú trong tên mô hình
+    # ĐÃ GỠ BỎ GridSearchCV ĐỂ CỨU RAM CLOUD. SỬ DỤNG THAM SỐ TỐI ƯU SẴN.
     models_dict = {
         "Linear Regression": LinearRegression(),
         "Ridge Regression": Ridge(alpha=1.0),
         "Decision Tree": DecisionTreeRegressor(max_depth=7, random_state=42),
-        "Random Forest": GridSearchCV(
-            RandomForestRegressor(random_state=42),
-            rf_param_grid,
-            cv=3,
-            scoring="r2",
-            n_jobs=-1,
+        "Random Forest": RandomForestRegressor(
+            n_estimators=100, max_depth=10, random_state=42, n_jobs=-1
         ),
-        "Gradient Boosting": GridSearchCV(
-            GradientBoostingRegressor(random_state=42),
-            gb_param_grid,
-            cv=3,
-            scoring="r2",
-            n_jobs=-1,
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42
         ),
     }
 
@@ -217,9 +178,7 @@ def process_ml_insights(df):
     for name, model in models_dict.items():
         model.fit(X_train, y_train)
 
-        best_model = (
-            model.best_estimator_ if hasattr(model, "best_estimator_") else model
-        )
+        best_model = model  # Vì không còn GridSearchCV nên mô hình chính là best_model
         trained_models[name] = best_model
 
         y_pred_val = best_model.predict(X_val)
@@ -256,7 +215,10 @@ def process_ml_insights(df):
 
 @st.cache_resource
 def load_bert_model():
-    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    # Lazy Loading để tránh sập RAM khi khởi động
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 
 @st.cache_data
@@ -422,7 +384,6 @@ def view_eda_page(df, f_df):
             background_color="white",
             colormap="ocean",
             max_words=100,
-            # ĐÃ XÓA 2 DÒNG LỖI Ở ĐÂY
         ).generate(text_data)
         fig_wc, ax_wc = plt.subplots(figsize=(10, 6))
         ax_wc.imshow(wordcloud, interpolation="bilinear")
@@ -799,9 +760,6 @@ def view_machine_learning_page(f_df):
 
     st.markdown("### 🏆 Bảng Benchmark Đánh giá Mô hình")
 
-    # -------------------------------------------------------------
-    # LOGIC TÔ MÀU ĐỘNG CHO MÔ HÌNH TỐT NHẤT DỰA TRÊN R2 TEST
-    # -------------------------------------------------------------
     best_model_name = metrics_df.loc[metrics_df["R² Test"].idxmax(), "Mô hình"]
 
     def highlight_best_model(row):
@@ -956,7 +914,7 @@ def view_machine_learning_page(f_df):
             st.pyplot(fig_shap)
     except Exception as e:
         st.warning(
-            f"Tính năng SHAP cần được cài đặt. Hãy chạy lệnh `pip install shap` trong Terminal."
+            f"Tính năng SHAP đang xử lý (Hoặc cần nâng cấp cấu hình Cloud để hiển thị)."
         )
 
     st.divider()
@@ -994,7 +952,9 @@ def view_machine_learning_page(f_df):
             list(trained_models.keys()),
             index=3,
         )
-        btn_predict = st.button("Chạy Dự Báo", type="primary", width="stretch")
+        btn_predict = st.button(
+            "Chạy Dự Báo", type="primary", use_container_width=True
+        )  # Ngoại lệ cho button
 
     with col_pred:
         if btn_predict:
@@ -1014,7 +974,6 @@ def view_machine_learning_page(f_df):
                 f"{selected_model} dự báo:\n### {max(0, int(np.expm1(res_rf)))} Likes"
             )
 
-            # ĐỒNG BỘ: Tự động gợi ý sử dụng mô hình tốt nhất
             st.caption(
                 f"💡 **Khuyến nghị hệ thống:** Dựa trên bảng Benchmark, đề xuất ưu tiên sử dụng kết quả dự báo của **{best_model_name}** do đây là mô hình đạt độ chính xác cao nhất."
             )
@@ -1086,7 +1045,7 @@ def view_ai_recommender_page(f_df):
     )
 
     if selected_model:
-        with st.spinner("Đang tính toán ma trận Vector Cosine & PCA 3D..."):
+        with st.spinner("Đang khởi tạo thuật toán NLP Cosine & PCA 3D..."):
             recs, embeddings, target_idx = get_bert_recommendations(
                 f_df, selected_model
             )
@@ -1160,87 +1119,6 @@ def view_ai_recommender_page(f_df):
                 )
 
                 st.plotly_chart(fig_3d, width="stretch")
-
-    st.divider()
-    st.subheader("🧪 Phòng thử nghiệm AI trực tuyến")
-
-    llm_model = st.selectbox(
-        "🚀 Chọn bộ não AI để thử nghiệm:",
-        [
-            "Qwen/Qwen2.5-7B-Instruct",
-            "HuggingFaceH4/zephyr-7b-beta",
-            "google/gemma-2-9b-it",
-        ],
-    )
-
-    user_prompt = st.text_area(
-        "✍️ Nhập câu hỏi hoặc văn bản yêu cầu AI xử lý:",
-        value="Dựa vào dữ liệu hệ thống, hãy đánh giá xem xu hướng mô hình nào có điểm cảm xúc tốt và lượt tương tác cao?",
-    )
-
-    if st.button("🔥 Thực thi suy luận", type="primary"):
-        if user_prompt:
-            with st.spinner(
-                "⚡ Đang thực thi thuật toán RAG & Gửi gói tin bảo mật đến Cloud Server..."
-            ):
-                try:
-                    top_rag_models = f_df.head(50).copy()
-                    top_rag_models["rag_text"] = (
-                        top_rag_models["modelId"] + " " + top_rag_models["task"]
-                    )
-
-                    rag_embeddings = get_cached_embeddings(
-                        top_rag_models["rag_text"].tolist()
-                    )
-                    query_embedding = get_cached_embeddings([user_prompt])[0].reshape(
-                        1, -1
-                    )
-
-                    rag_sim = cosine_similarity(
-                        query_embedding, rag_embeddings
-                    ).flatten()
-                    top_3_idx = rag_sim.argsort()[-3:][::-1]
-
-                    context_lines = []
-                    for idx in top_3_idx:
-                        row = top_rag_models.iloc[idx]
-                        context_lines.append(
-                            f"- Mô hình '{row['modelId']}' [Tác vụ: {row['task']}] đạt {row['downloads']:,} lượt tải, {row['likes']:,} lượt thích, điểm cảm xúc cộng đồng: {row['sentiment_score']}/100 ({row['sentiment_class']})."
-                        )
-
-                    context_str = "\n".join(context_lines)
-
-                    system_instruction = (
-                        "Bạn là một Trợ lý AI cao cấp tích hợp công nghệ RAG (Retrieval-Augmented Generation). "
-                        "Bạn PHẢI trả lời hoàn toàn bằng Tiếng Việt 100%. Hãy sử dụng thông tin từ cơ sở dữ liệu thời gian thực được trích xuất từ đồ án sau đây để phân tích và trả lời câu hỏi của người dùng:\n\n"
-                        f"[CƠ SỞ DỮ LIỆU NGỮ CẢNH TỪ ĐỒ ÁN]:\n{context_str}\n\n"
-                        "Tuyệt đối không bịa đặt số liệu nằm ngoài ngữ cảnh trên."
-                    )
-
-                    hf_token = st.secrets["hf_token"]
-                    client = InferenceClient(token=hf_token)
-
-                    chat_response = client.chat_completion(
-                        model=llm_model,
-                        messages=[
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        max_tokens=600,
-                        temperature=0.3,
-                    )
-
-                    response = chat_response.choices[0].message.content
-
-                    st.markdown("**🎯 Kết quả phản hồi từ Cloud AI:**")
-                    st.success(response)
-
-                except Exception as e:
-                    st.error(
-                        f"Lỗi kết nối API Cloud: {e}. Hệ thống công cộng đang bận, vui lòng thử lại sau."
-                    )
-        else:
-            st.warning("Vui lòng nhập văn bản trước khi thực thi.")
 
 
 def view_battle_and_ai_page(f_df):
@@ -1377,7 +1255,9 @@ def view_battle_and_ai_page(f_df):
 def main():
     df = fetch_and_clean_data()
     if df.empty:
-        return st.warning("Không có dữ liệu thỏa mãn.")
+        return st.warning(
+            "Không có dữ liệu thỏa mãn. Vui lòng kiểm tra lại kết nối API."
+        )
 
     st.sidebar.image(
         "https://huggingface.co/front/assets/huggingface_logo-noborder.svg", width=50
