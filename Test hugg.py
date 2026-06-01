@@ -319,7 +319,7 @@ def view_eda_page(df, f_df):
         fig_top.update_layout(
             yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
         )
-        st.plotly_chart(fig_top, use_container_width=True)
+        st.plotly_chart(fig_top, width="stretch")
     with col_b:
         top_tasks = f_df["task"].value_counts().nlargest(7).index
         f_df_pie = f_df.copy()
@@ -335,7 +335,7 @@ def view_eda_page(df, f_df):
             color_discrete_sequence=px.colors.qualitative.Set3,
         )
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width="stretch")
 
     st.divider()
     st.header("II. Khai phá Dữ liệu")
@@ -351,7 +351,7 @@ def view_eda_page(df, f_df):
                 points="all",
                 color_discrete_sequence=["#17BECF"],
             ),
-            use_container_width=True,
+            width="stretch",
         )
     with c2:
         hist_data = [f_df["log_downloads"].dropna()]
@@ -378,7 +378,7 @@ def view_eda_page(df, f_df):
             annotation_position="top left",
         )
         fig_hist.update_layout(title_text="Phân bổ Lượt tải kèm KDE & Biên thống kê")
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, width="stretch")
 
     st.subheader("2. Xu hướng phát triển & Hành vi Đặt tên")
     col1, col2 = st.columns(2)
@@ -393,7 +393,7 @@ def view_eda_page(df, f_df):
             color_discrete_sequence=["#00C896"],
         )
         fig_trend.update_traces(line_shape="spline", line=dict(width=3))
-        st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_trend, width="stretch")
     with col2:
         top_auth = f_df["author"].value_counts().head(10).reset_index()
         top_auth.columns = ["author", "count"]
@@ -409,7 +409,7 @@ def view_eda_page(df, f_df):
         fig_auth.update_layout(
             yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
         )
-        st.plotly_chart(fig_auth, use_container_width=True)
+        st.plotly_chart(fig_auth, width="stretch")
 
     st.markdown("**➤ Khai phá Văn bản: Phân tích từ khóa định danh Model**")
     wordcloud_col, ngram_col = st.columns([1.2, 1])
@@ -457,7 +457,7 @@ def view_eda_page(df, f_df):
                 color_continuous_scale="Blues",
             )
             fig_ngram.update_layout(coloraxis_showscale=False)
-            st.plotly_chart(fig_ngram, use_container_width=True)
+            st.plotly_chart(fig_ngram, width="stretch")
         except Exception:
             st.info("Không đủ dữ liệu văn bản để phân tích N-grams.")
 
@@ -472,7 +472,7 @@ def view_eda_page(df, f_df):
         title="Bản đồ Mật độ 2D: Chiều dài tên lý tưởng",
         labels={"name_len": "Độ dài tên Model", "log_downloads": "Lượt tải (Log)"},
     )
-    st.plotly_chart(fig_len, use_container_width=True)
+    st.plotly_chart(fig_len, width="stretch")
 
     st.subheader("3. Phân tích chi tiết Tác vụ")
     col1, col2 = st.columns(2)
@@ -491,7 +491,7 @@ def view_eda_page(df, f_df):
         fig1.update_layout(
             yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
         )
-        st.plotly_chart(fig1, use_container_width=True)
+        st.plotly_chart(fig1, width="stretch")
     with col2:
         mean_stars = (
             f_df.groupby("task")["likes"]
@@ -508,7 +508,7 @@ def view_eda_page(df, f_df):
             title="Trung bình lượt Thích (Stars) theo Tác vụ",
         )
         fig4.update_layout(xaxis_tickangle=-45, coloraxis_showscale=False)
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(fig4, width="stretch")
 
     st.markdown("**➤ Phân bố theo không gian & Thời gian**")
     c_time, c_heat = st.columns(2)
@@ -530,7 +530,7 @@ def view_eda_page(df, f_df):
                 line_color="red",
                 annotation_text="Trung vị",
             )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
     with c_heat:
         pivot_table = pd.crosstab(f_df["task"], f_df["month_year"])
         fig3 = px.imshow(
@@ -539,7 +539,7 @@ def view_eda_page(df, f_df):
             color_continuous_scale="YlGnBu",
             title="Mật độ Model (Tác vụ x Tháng)",
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width="stretch")
 
     st.markdown("**➤ Kiểm định Thống kê & Phân rã Phân phối**")
     col_stat1, col_stat2 = st.columns(2)
@@ -557,7 +557,7 @@ def view_eda_page(df, f_df):
             points="outliers",
             color_discrete_sequence=px.colors.qualitative.Pastel,
         )
-        st.plotly_chart(fig_box_task, use_container_width=True)
+        st.plotly_chart(fig_box_task, width="stretch")
 
     with col_stat2:
         st.write("**Biểu đồ QQ-Plot**")
@@ -590,7 +590,7 @@ def view_eda_page(df, f_df):
                     "Tiêu cực": "#dc3545",
                 },
             ),
-            use_container_width=True,
+            width="stretch",
         )
     with c_sent2:
         st.plotly_chart(
@@ -603,7 +603,7 @@ def view_eda_page(df, f_df):
                 title="Tương quan giữa Điểm cảm xúc và Tỷ lệ Tương tác",
                 color_discrete_sequence=px.colors.qualitative.Set2,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("5. Dấu vết Lịch sử: Sự trỗi dậy của các Tác vụ")
@@ -626,7 +626,7 @@ def view_eda_page(df, f_df):
         color_discrete_sequence=px.colors.qualitative.Prism,
     )
     fig_area.update_traces(line=dict(width=0))
-    st.plotly_chart(fig_area, use_container_width=True)
+    st.plotly_chart(fig_area, width="stretch")
 
     st.divider()
     st.subheader("6. Đồ thị Tri thức & Mạng lưới AI")
@@ -729,7 +729,7 @@ def view_eda_page(df, f_df):
                 plot_bgcolor="rgba(248, 249, 250, 1)",
             ),
         )
-        st.plotly_chart(fig_network, use_container_width=True)
+        st.plotly_chart(fig_network, width="stretch")
 
     st.subheader("7. Ma trận tương quan & Phân tích chuyên sâu")
     corr_cols = [
@@ -753,7 +753,7 @@ def view_eda_page(df, f_df):
             color_continuous_scale="RdBu_r",
             range_color=[-1, 1],
         )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        st.plotly_chart(fig_corr, width="stretch")
     with c_corr2:
         st.markdown("**➤ Tương quan Log-Log**")
         st.plotly_chart(
@@ -767,7 +767,7 @@ def view_eda_page(df, f_df):
                 title="Minh chứng tương quan Downloads vs Likes",
                 color_discrete_sequence=px.colors.qualitative.G10,
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
@@ -821,7 +821,7 @@ def view_machine_learning_page(f_df):
                 "RMSE Test": "{:.2f}",
             }
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -845,7 +845,7 @@ def view_machine_learning_page(f_df):
                 title="Độ chính xác R² trên Tập Kiểm thử",
                 color_discrete_sequence=px.colors.qualitative.Safe,
             ).update_layout(showlegend=False),
-            use_container_width=True,
+            width="stretch",
         )
     with c2:
         melt_metrics = metrics_df.melt(
@@ -865,7 +865,7 @@ def view_machine_learning_page(f_df):
                 title="So sánh Sai số trên Tập Kiểm thử",
                 color_discrete_map={"MAE Test": "#FF7F0E", "RMSE Test": "#1F77B4"},
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.markdown("**➤ Thực tế vs Dự báo - So sánh 2 Mô hình**")
@@ -913,7 +913,7 @@ def view_machine_learning_page(f_df):
         template="plotly_white",
         hovermode="closest",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.divider()
     st.markdown("### 🔎 Phân tích Đặc trưng")
@@ -941,7 +941,7 @@ def view_machine_learning_page(f_df):
             title="Biến số quyết định Lượt Thích",
         )
         fig_coef.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(fig_coef, use_container_width=True)
+        st.plotly_chart(fig_coef, width="stretch")
 
     st.divider()
     st.markdown("### 🧠 Giải thích AI Chuyên sâu")
@@ -994,7 +994,7 @@ def view_machine_learning_page(f_df):
             list(trained_models.keys()),
             index=3,
         )
-        btn_predict = st.button("Chạy Dự Báo", type="primary", use_container_width=True)
+        btn_predict = st.button("Chạy Dự Báo", type="primary", width="stretch")
 
     with col_pred:
         if btn_predict:
@@ -1056,7 +1056,7 @@ def view_ai_recommender_page(f_df):
                     title="Cụm chiến lược",
                     color_discrete_sequence=px.colors.qualitative.Vivid,
                 ),
-                use_container_width=True,
+                width="stretch",
             )
         with c_km2:
             if len(K_range) > 1:
@@ -1073,7 +1073,7 @@ def view_ai_recommender_page(f_df):
                     line_color="red",
                 )
                 fig_elbow.update_traces(line_shape="spline", line=dict(width=2.5))
-                st.plotly_chart(fig_elbow, use_container_width=True)
+                st.plotly_chart(fig_elbow, width="stretch")
             else:
                 st.warning("Dữ liệu quá ít để vẽ đường cong Elbow.")
     else:
@@ -1159,7 +1159,7 @@ def view_ai_recommender_page(f_df):
                     margin=dict(l=0, r=0, b=0, t=40), scene=dict(bgcolor="#f8f9fa")
                 )
 
-                st.plotly_chart(fig_3d, use_container_width=True)
+                st.plotly_chart(fig_3d, width="stretch")
 
     st.divider()
     st.subheader("🧪 Phòng thử nghiệm AI trực tuyến")
@@ -1345,7 +1345,7 @@ def view_battle_and_ai_page(f_df):
             ),
         )
 
-        st.plotly_chart(fig_radar, use_container_width=True)
+        st.plotly_chart(fig_radar, width="stretch")
         comp_df = pd.DataFrame(
             {
                 "Chỉ số": [
@@ -1368,7 +1368,7 @@ def view_battle_and_ai_page(f_df):
                 ],
             }
         )
-        st.dataframe(comp_df, hide_index=True, use_container_width=True)
+        st.dataframe(comp_df, hide_index=True, width="stretch")
 
 
 # ==========================================
