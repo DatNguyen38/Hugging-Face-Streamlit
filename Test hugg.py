@@ -128,15 +128,20 @@ def get_statistics(df):
 # ------2. MACHINE LEARNING ENGINE----------
 # ==========================================
 def perform_clustering(df):
-    if len(df) < 3:
+    if len(df) < 4:
         return df, None
     df_c = df.copy()
     X = np.log1p(df_c[["downloads", "likes"]])
     X_scaled = StandardScaler().fit_transform(X)
-    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
     df_c["Cluster"] = kmeans.fit_predict(X_scaled)
     df_c["Cluster_Name"] = df_c["Cluster"].map(
-        {0: "Tiềm năng", 1: "Phổ biến", 2: "Cộng đồng"}
+        {
+            0: "Mới nổi (Emerging)",
+            1: "Phổ biến (Popular)",
+            2: "Tiềm năng (Niche)",
+            3: "Đột phá (Viral)",
+        }
     )
     return df_c, X_scaled
 
