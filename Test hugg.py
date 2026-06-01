@@ -37,7 +37,7 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 # ==========================================
 @st.cache_data
 def fetch_and_clean_data(
-    limit=1000,
+    limit=3001,
 ):  # Giảm limit xuống 1000 để an toàn cho 1GB RAM Cloud
     # Đã loại bỏ SQLite để tránh lỗi "Read-only file system" và "Connection reset"
     api = HfApi()
