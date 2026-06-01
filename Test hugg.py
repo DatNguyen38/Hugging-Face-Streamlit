@@ -1,12 +1,3 @@
-Tôi thành thật xin lỗi Đạt! Lỗi này hoàn toàn do tôi sơ suất.
-
-Trong lúc quá tay "làm điệu" cho biểu đồ Word Cloud, tôi đã thêm hai tham số là `border_color` và `border_width`. Tuy nhiên, thư viện `wordcloud` của Python thực tế **không hỗ trợ** hai tham số này (nó chỉ hỗ trợ viền khi có ảnh mask định dạng sẵn). Việc thêm vào đã khiến hệ thống báo lỗi `TypeError` không nhận diện được biến.
-
-Tôi đã cắt bỏ ngay hai tham số lỗi đó ra khỏi hàm cấu hình Word Cloud. Dưới đây là **toàn bộ mã nguồn hoàn chỉnh và đã sửa lỗi**, vẫn giữ nguyên toàn bộ các nâng cấp về giao diện, thuật toán và logic tô màu mô hình tốt nhất mà chúng ta vừa làm.
-
-Bạn hãy copy và dán đè lại toàn bộ nhé:
-
-```python
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -188,17 +179,14 @@ def process_ml_insights(df):
         X, y, test_size=0.15, random_state=42
     )
     X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=(15/85), random_state=42
+        X_temp, y_temp, test_size=(15 / 85), random_state=42
     )
 
-    rf_param_grid = {
-        'n_estimators': [50, 100, 150],
-        'max_depth': [5, 10, 15]
-    }
+    rf_param_grid = {"n_estimators": [50, 100, 150], "max_depth": [5, 10, 15]}
     gb_param_grid = {
-        'n_estimators': [50, 100],
-        'learning_rate': [0.05, 0.1],
-        'max_depth': [3, 5]
+        "n_estimators": [50, 100],
+        "learning_rate": [0.05, 0.1],
+        "max_depth": [3, 5],
     }
 
     # Bỏ các ghi chú trong tên mô hình
@@ -207,12 +195,18 @@ def process_ml_insights(df):
         "Ridge Regression": Ridge(alpha=1.0),
         "Decision Tree": DecisionTreeRegressor(max_depth=7, random_state=42),
         "Random Forest": GridSearchCV(
-            RandomForestRegressor(random_state=42), 
-            rf_param_grid, cv=3, scoring='r2', n_jobs=-1
+            RandomForestRegressor(random_state=42),
+            rf_param_grid,
+            cv=3,
+            scoring="r2",
+            n_jobs=-1,
         ),
         "Gradient Boosting": GridSearchCV(
-            GradientBoostingRegressor(random_state=42), 
-            gb_param_grid, cv=3, scoring='r2', n_jobs=-1
+            GradientBoostingRegressor(random_state=42),
+            gb_param_grid,
+            cv=3,
+            scoring="r2",
+            n_jobs=-1,
         ),
     }
 
@@ -222,8 +216,10 @@ def process_ml_insights(df):
 
     for name, model in models_dict.items():
         model.fit(X_train, y_train)
-        
-        best_model = model.best_estimator_ if hasattr(model, 'best_estimator_') else model
+
+        best_model = (
+            model.best_estimator_ if hasattr(model, "best_estimator_") else model
+        )
         trained_models[name] = best_model
 
         y_pred_val = best_model.predict(X_val)
@@ -295,6 +291,7 @@ def get_bert_recommendations(df, target_model_id, top_n=5):
 # ------------3. PAGE VIEWS-----------------
 # ==========================================
 
+
 def view_eda_page(df, f_df):
     st.header("I. Thống kê Tổng quan Hệ sinh thái AI")
     st.caption(
@@ -319,7 +316,9 @@ def view_eda_page(df, f_df):
             color="downloads",
             color_continuous_scale="Teal",
         )
-        fig_top.update_layout(yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False)
+        fig_top.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
         st.plotly_chart(fig_top, use_container_width=True)
     with col_b:
         top_tasks = f_df["task"].value_counts().nlargest(7).index
@@ -335,7 +334,7 @@ def view_eda_page(df, f_df):
             title="Tỷ trọng Tác vụ",
             color_discrete_sequence=px.colors.qualitative.Set3,
         )
-        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
         st.plotly_chart(fig_pie, use_container_width=True)
 
     st.divider()
@@ -407,7 +406,9 @@ def view_eda_page(df, f_df):
             color="count",
             color_continuous_scale="Purp",
         )
-        fig_auth.update_layout(yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False)
+        fig_auth.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
         st.plotly_chart(fig_auth, use_container_width=True)
 
     st.markdown("**➤ Khai phá Văn bản: Phân tích từ khóa định danh Model**")
@@ -420,7 +421,7 @@ def view_eda_page(df, f_df):
             height=500,
             background_color="white",
             colormap="ocean",
-            max_words=100
+            max_words=100,
             # ĐÃ XÓA 2 DÒNG LỖI Ở ĐÂY
         ).generate(text_data)
         fig_wc, ax_wc = plt.subplots(figsize=(10, 6))
@@ -487,7 +488,9 @@ def view_eda_page(df, f_df):
             color_continuous_scale="Viridis",
             title="Số lượng Model theo từng Tác vụ",
         )
-        fig1.update_layout(yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False)
+        fig1.update_layout(
+            yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False
+        )
         st.plotly_chart(fig1, use_container_width=True)
     with col2:
         mean_stars = (
@@ -563,9 +566,9 @@ def view_eda_page(df, f_df):
         ax_qq.set_title("QQ-Plot của biến Log Likes")
         ax_qq.set_xlabel("Phân vị lý thuyết (Theoretical Quantiles)")
         ax_qq.set_ylabel("Dữ liệu thực tế (Ordered Values)")
-        ax_qq.get_lines()[0].set_markerfacecolor('#1f77b4')
+        ax_qq.get_lines()[0].set_markerfacecolor("#1f77b4")
         ax_qq.get_lines()[0].set_markeredgewidth(0)
-        ax_qq.get_lines()[1].set_color('#FF4B4B')
+        ax_qq.get_lines()[1].set_color("#FF4B4B")
         st.pyplot(fig_qq)
 
     st.subheader("4. Phân tích Cảm xúc Cộng đồng")
@@ -795,25 +798,29 @@ def view_machine_learning_page(f_df):
         return st.warning("Cần ít nhất 15 records dữ liệu để huấn luyện Học máy.")
 
     st.markdown("### 🏆 Bảng Benchmark Đánh giá Mô hình")
-    
+
     # -------------------------------------------------------------
     # LOGIC TÔ MÀU ĐỘNG CHO MÔ HÌNH TỐT NHẤT DỰA TRÊN R2 TEST
     # -------------------------------------------------------------
-    best_model_name = metrics_df.loc[metrics_df['R² Test'].idxmax(), 'Mô hình']
+    best_model_name = metrics_df.loc[metrics_df["R² Test"].idxmax(), "Mô hình"]
 
     def highlight_best_model(row):
-        if row['Mô hình'] == best_model_name:
-            return ['background-color: #d4edda; color: #155724; font-weight: bold'] * len(row)
-        return [''] * len(row)
+        if row["Mô hình"] == best_model_name:
+            return [
+                "background-color: #d4edda; color: #155724; font-weight: bold"
+            ] * len(row)
+        return [""] * len(row)
 
     st.dataframe(
-        metrics_df.style.apply(highlight_best_model, axis=1).format({
-            "R² Validation": "{:.4f}",
-            "R² Test": "{:.4f}",
-            "MAE Validation": "{:.2f}",
-            "MAE Test": "{:.2f}",
-            "RMSE Test": "{:.2f}"
-        }),
+        metrics_df.style.apply(highlight_best_model, axis=1).format(
+            {
+                "R² Validation": "{:.4f}",
+                "R² Test": "{:.4f}",
+                "MAE Validation": "{:.2f}",
+                "MAE Test": "{:.2f}",
+                "RMSE Test": "{:.2f}",
+            }
+        ),
         use_container_width=True,
         hide_index=True,
     )
@@ -869,7 +876,12 @@ def view_machine_learning_page(f_df):
             y=predictions_dict["Linear Regression"],
             mode="markers",
             name="Dự báo Linear",
-            marker=dict(color="#1f77b4", size=7, opacity=0.5, line=dict(width=1, color="DarkSlateGrey")),
+            marker=dict(
+                color="#1f77b4",
+                size=7,
+                opacity=0.5,
+                line=dict(width=1, color="DarkSlateGrey"),
+            ),
         )
     )
     fig.add_trace(
@@ -878,7 +890,13 @@ def view_machine_learning_page(f_df):
             y=predictions_dict["Random Forest"],
             mode="markers",
             name="Dự báo Random Forest",
-            marker=dict(color="#2ca02c", size=8, opacity=0.7, symbol="diamond", line=dict(width=1, color="DarkSlateGrey")),
+            marker=dict(
+                color="#2ca02c",
+                size=8,
+                opacity=0.7,
+                symbol="diamond",
+                line=dict(width=1, color="DarkSlateGrey"),
+            ),
         )
     )
     fig.add_trace(
@@ -893,7 +911,7 @@ def view_machine_learning_page(f_df):
         xaxis_title="Log Likes Thực tế",
         yaxis_title="Log Likes Dự báo",
         template="plotly_white",
-        hovermode="closest"
+        hovermode="closest",
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -995,7 +1013,7 @@ def view_machine_learning_page(f_df):
             c_res2.info(
                 f"{selected_model} dự báo:\n### {max(0, int(np.expm1(res_rf)))} Likes"
             )
-            
+
             # ĐỒNG BỘ: Tự động gợi ý sử dụng mô hình tốt nhất
             st.caption(
                 f"💡 **Khuyến nghị hệ thống:** Dựa trên bảng Benchmark, đề xuất ưu tiên sử dụng kết quả dự báo của **{best_model_name}** do đây là mô hình đạt độ chính xác cao nhất."
@@ -1094,7 +1112,6 @@ def view_ai_recommender_page(f_df):
             st.divider()
             st.markdown("### 🌌 Bản đồ Không gian Đa chiều")
             with st.expander("📌 Xem bản đồ Vector 3D của hệ sinh thái"):
-
                 pca = PCA(n_components=3)
                 pca_result = pca.fit_transform(embeddings)
 
@@ -1119,9 +1136,9 @@ def view_ai_recommender_page(f_df):
                     hover_name="modelId",
                     hover_data={"Trạng thái": False, "task": True},
                     color_discrete_map={
-                        f"📍 {selected_model}": "#FF4B4B",     
-                        "⭐ Mô hình tương tự": "#FFA500",   
-                        "Model khác": "#1f77b4",            
+                        f"📍 {selected_model}": "#FF4B4B",
+                        "⭐ Mô hình tương tự": "#FFA500",
+                        "Model khác": "#1f77b4",
                     },
                 )
 
@@ -1133,10 +1150,14 @@ def view_ai_recommender_page(f_df):
                     selector=dict(name="⭐ Mô hình tương tự"),
                 )
                 fig_3d.update_traces(
-                    marker=dict(size=14, symbol="diamond", line=dict(color="black", width=2)),
+                    marker=dict(
+                        size=14, symbol="diamond", line=dict(color="black", width=2)
+                    ),
                     selector=dict(name=f"📍 {selected_model}"),
                 )
-                fig_3d.update_layout(margin=dict(l=0, r=0, b=0, t=40), scene=dict(bgcolor="#f8f9fa"))
+                fig_3d.update_layout(
+                    margin=dict(l=0, r=0, b=0, t=40), scene=dict(bgcolor="#f8f9fa")
+                )
 
                 st.plotly_chart(fig_3d, use_container_width=True)
 
@@ -1294,24 +1315,34 @@ def view_battle_and_ai_page(f_df):
         fig_radar = go.Figure()
         fig_radar.add_trace(
             go.Scatterpolar(
-                r=m1_scores, theta=labels, fill="toself", name=model1, 
-                line_color="#FF4B4B", fillcolor="rgba(255, 75, 75, 0.4)"
+                r=m1_scores,
+                theta=labels,
+                fill="toself",
+                name=model1,
+                line_color="#FF4B4B",
+                fillcolor="rgba(255, 75, 75, 0.4)",
             )
         )
         fig_radar.add_trace(
             go.Scatterpolar(
-                r=m2_scores, theta=labels, fill="toself", name=model2, 
-                line_color="#0068C9", fillcolor="rgba(0, 104, 201, 0.4)"
+                r=m2_scores,
+                theta=labels,
+                fill="toself",
+                name=model2,
+                line_color="#0068C9",
+                fillcolor="rgba(0, 104, 201, 0.4)",
             )
         )
 
         fig_radar.update_layout(
             polar=dict(
                 radialaxis=dict(visible=True, range=[0, 100], showticklabels=False),
-                angularaxis=dict(tickfont=dict(size=13, color="black"))
+                angularaxis=dict(tickfont=dict(size=13, color="black")),
             ),
             showlegend=True,
-            title=dict(text=f"Đại chiến thông số: {model1} VS {model2}", font=dict(size=18)),
+            title=dict(
+                text=f"Đại chiến thông số: {model1} VS {model2}", font=dict(size=18)
+            ),
         )
 
         st.plotly_chart(fig_radar, use_container_width=True)
@@ -1423,4 +1454,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
