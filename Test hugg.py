@@ -7,7 +7,7 @@ import plotly.figure_factory as ff
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from huggingface_hub import HfApi, InferenceClient
-from datetime import datetime
+from datetime import datetime, timezone
 import pickle
 import shap
 import networkx as nx
@@ -42,7 +42,9 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 @st.cache_data
 def load_data_final_v1(limit=3000):
     conn = sqlite3.connect("huggingface_local_pipeline.db")
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    from datetime import timezone
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # 1. Thử lấy từ cache SQLite trước
     try:
