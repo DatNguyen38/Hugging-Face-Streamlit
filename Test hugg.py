@@ -38,8 +38,9 @@ st.set_page_config(page_title="HF VN Data Science", page_icon="📈", layout="wi
 # ==========================================
 # ------------1. DATA ENGINE----------------
 # ==========================================
+# ĐỔI TÊN HÀM ĐỂ PHÁ VỠ CACHE CỨNG ĐẦU CỦA STREAMLIT
 @st.cache_data
-def fetch_and_clean_data(limit=3000):
+def load_data_final_v1(limit=3000):
     conn = sqlite3.connect("huggingface_local_pipeline.db")
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
@@ -50,6 +51,33 @@ def fetch_and_clean_data(limit=3000):
         )
         if not db_df.empty:
             db_df["createdAt"] = pd.to_datetime(db_df["createdAt"], utc=True)
+
+            # --- AUTO FIX: Tự động vá mọi cột bị thiếu do Database cũ ---
+            if "year" not in db_df.columns:
+                db_df["year"] = db_df["createdAt"].dt.year
+            if "month_year" not in db_df.columns:
+                db_df["month_year"] = db_df["createdAt"].dt.to_period("M").astype(str)
+            if "model_name_only" not in db_df.columns:
+                db_df["model_name_only"] = db_df["modelId"].apply(
+                    lambda x: str(x).split("/")[-1]
+                )
+            if "sentiment_score" not in db_df.columns:
+                np.random.seed(42)
+                base_sent = (
+                    55
+                    + 4 * np.log1p(db_df["likes"])
+                    - 1.5 * np.log1p(db_df["downloads"])
+                )
+                db_df["sentiment_score"] = np.clip(
+                    base_sent + np.random.normal(10, 8, size=len(db_df)), 0, 100
+                ).round(1)
+                db_df["sentiment_class"] = pd.cut(
+                    db_df["sentiment_score"],
+                    bins=[0, 52, 72, 100],
+                    labels=["Tiêu cực", "Trung lập", "Tích cực"],
+                )
+            # -----------------------------------------------------------
+
             conn.close()
             return db_df
     except Exception:
@@ -85,6 +113,11 @@ def fetch_and_clean_data(limit=3000):
         df["log_likes"] = np.log1p(df["likes"])
         df["engagement_rate"] = (df["likes"] / (df["downloads"] + 1)) * 100
 
+        # Tạo cột year và month_year
+        df["createdAt"] = pd.to_datetime(df["createdAt"], utc=True)
+        df["year"] = df["createdAt"].dt.year
+        df["month_year"] = df["createdAt"].dt.to_period("M").astype(str)
+
         # Phân khúc (Scale)
         df["scale"] = pd.qcut(
             df["downloads"],
@@ -106,7 +139,6 @@ def fetch_and_clean_data(limit=3000):
         )
 
         df["fetched_date"] = today_str
-        df["createdAt"] = pd.to_datetime(df["createdAt"], utc=True)
 
         # 4. Lưu cache vào SQLite
         df_to_save = df.copy()
@@ -180,7 +212,6 @@ def process_ml_insights(df):
         "max_depth": [3, 5],
     }
 
-    # Bỏ các ghi chú trong tên mô hình
     models_dict = {
         "Linear Regression": LinearRegression(),
         "Ridge Regression": Ridge(alpha=1.0),
@@ -413,7 +444,6 @@ def view_eda_page(df, f_df):
             background_color="white",
             colormap="ocean",
             max_words=100,
-            # ĐÃ XÓA 2 DÒNG LỖI Ở ĐÂY
         ).generate(text_data)
         fig_wc, ax_wc = plt.subplots(figsize=(10, 6))
         ax_wc.imshow(wordcloud, interpolation="bilinear")
@@ -622,7 +652,7 @@ def view_eda_page(df, f_df):
     st.divider()
     st.subheader("6. Đồ thị Tri thức & Mạng lưới AI")
     st.markdown(
-        "Phân tích Đồ thị Mạng lưới giúp chúng ta tìm ra **Tâm điểm (Centrality)** của hệ sinh thái. Biểu đồ kết nối: **Loại Tác vụ** -> **Tác giả** -> **Mô hình AI**."
+        "Phân tích Đồ thị Mạng lưới giúp chúngạm ra **Tâm điểm (Centrality)** của hệ sinh thái. Biểu đồ kết nối: **Loại Tác vụ** -> **Tác giả** -> **Mô hình AI**."
     )
 
     with st.spinner("Đang xây dựng Đồ thị tri thức (NetworkX)..."):
@@ -1384,7 +1414,7 @@ def view_battle_and_ai_page(f_df):
 # -----------4. MAIN _ APP ROUTING----------
 # ==========================================
 def main():
-    df = fetch_and_clean_data()
+    df = load_data_final_v1()
     if df.empty:
         return st.warning("Không có dữ liệu thỏa mãn.")
 
