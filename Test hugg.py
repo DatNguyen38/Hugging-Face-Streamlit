@@ -1,3 +1,9 @@
+import sys
+from unittest.mock import MagicMock
+
+sys.modules["torchvision"] = MagicMock()
+sys.modules["torchvision.transforms"] = MagicMock()
+sys.modules["torchvision.transforms.v2"] = MagicMock()
 import pandas as pd
 import numpy as np
 import streamlit as st
